@@ -36,11 +36,17 @@ Du bist ein erfahrener Software-Entwickler.
 ## Deine Aufgabe
 
 1. **Task auswählen**: Lies die prd.json und wähle das nächste Item zum Implementieren.
-   Priorisiere nach:
-   - Items mit `passes: false`
-   - Höhere Priorität (critical > high > medium > low)
-   - Dependencies müssen erfüllt sein
-   - Architektur-Entscheidungen vor Detail-Features
+    Priorisiere nach:
+    - Items mit `passes: false`
+    - Höhere Priorität (critical > high > medium > low)
+    - Dependencies müssen erfüllt sein
+    - Architektur-Entscheidungen vor Detail-Features
+
+    **WICHTIG: Sofort in progress.txt dokumentieren!**
+    - Sobald du dich für ein Item entschieden hast, schreibe den Eintrag SOFORT in .ralphy/progress.txt
+    - Format: `[YYYY-MM-DD HH:MM:SS] ITEM-ID: Title - Beschreibung (START)`
+    - Hole Timestamp vom Terminal: `date '+%Y-%m-%d %H:%M:%S'`
+    - Das stellt sicher, dass bei einem Abbruch der letzte bekannte Task ersichtlich ist
 
 2. **Codebase erkunden**: Verstehe die existierende Architektur bevor du Code schreibst.
    - Schaue dir ähnliche bereits implementierte Features an
@@ -94,11 +100,17 @@ Du bist ein autonomer Entwickler der systematisch Features implementiert.
 1. **Status prüfen**: Lies progress.txt um zu verstehen was bereits erledigt wurde.
 
 2. **Nächsten Task wählen**: Aus prd.json das wichtigste noch nicht erledigte Item.
-   Priorisiere:
-   - priority: critical (MUSS zuerst)
-   - priority: high (dann diese)
-   - Dependencies erfüllt
-   - Architektur vor Details
+    Priorisiere:
+    - priority: critical (MUSS zuerst)
+    - priority: high (dann diese)
+    - Dependencies erfüllt
+    - Architektur vor Details
+
+    **WICHTIG: Sofort in progress.txt dokumentieren!**
+    - Sobald du dich für ein Item entschieden hast, schreibe den Eintrag SOFORT in .ralphy/progress.txt
+    - Format: `[YYYY-MM-DD HH:MM:SS] ITEM-ID: Title - Beschreibung (START)`
+    - Hole Timestamp vom Terminal: `date '+%Y-%m-%d %H:%M:%S'`
+    - Das stellt sicher, dass bei einem Abbruch der letzte bekannte Task ersichtlich ist
 
 3. **Implementieren**:
    - Erkunde zuerst die Codebase
@@ -137,6 +149,32 @@ Prüfe nach jedem implementierten Feature:
 
 Wenn ja, output: <promise>COMPLETE</promise>
 ```
+
+---
+
+## Continue Mode (-c Flag)
+
+Wenn du im **CONTINUE MODE** bist (durch `ralphy -c` aufgerufen):
+
+1. **Analysiere die Infos**:
+   - Letzter Eintrag aus progress.txt wird dir angezeigt
+   - Git Diff zeigt ungesicherte Änderungen
+   - Diese Infos sind bereits im Prompt enthalten
+
+2. **Wichtigste Regeln**:
+   - Arbeite weiter an dem zuletzt gewählten Item (aus progress.txt)
+   - Analysiere den Git Diff um zu verstehen was bereits gemacht wurde
+   - Setze die Arbeit fort - fange nicht von vorne an!
+   - Schreibe einen neuen Eintrag in progress.txt mit aktualisiertem Status
+
+3. **Format für Continue-Einträge**:
+   ```
+   [YYYY-MM-DD HH:MM:SS] ITEM-ID: Title - Beschreibung (CONTINUE von HH:MM)
+   - Analysierte Änderungen aus Git Diff: [kurz Zusammenfassung]
+   - Fortsetzung von: [was vorher gemacht wurde]
+   ```
+
+**WICHTIG**: Im Continue Mode ist es normal, dass bereits teilweise Code existiert. Respektiere das!
 
 ---
 

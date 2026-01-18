@@ -107,6 +107,7 @@ PROVIDER=""       # Provider name
 MODEL=""          # Model for opencode
 VARIANT=""        # Variant for opencode (e.g., low, high)
 MAX_ITERATIONS=""
+CONTINUE_MODE=""  # Continue from last session
 
 show_help() {
     echo "Ralphy Wiggum Loop - Autonome AI-Entwicklung"
@@ -145,9 +146,10 @@ show_help() {
     echo "╚══════════════════════════════════════════════════════════════════╝"
     echo ""
     echo "Weitere Optionen:"
-    echo "  -h, --help    Diese Hilfe anzeigen"
-    echo "  --list        Verfügbare Provider anzeigen"
-    echo "  -v, --version Version anzeigen"
+    echo "  -c, --continue  Letzte Session wiederherstellen (aus progress.txt + git diff)"
+    echo "  -h, --help      Diese Hilfe anzeigen"
+    echo "  --list          Verfügbare Provider anzeigen"
+    echo "  -v, --version   Version anzeigen"
     echo ""
 }
 
@@ -273,6 +275,10 @@ while [[ $# -gt 0 ]]; do
         --ccs-qwen)
             TOOL="ccs"
             PROVIDER="qwen"
+            shift
+            ;;
+        -c|--continue)
+            CONTINUE_MODE=true
             shift
             ;;
         # Numeric = iterations
@@ -413,6 +419,79 @@ PRD_FILE="$PROJECT_DIR/.ralphy/prd.json"
 PROGRESS_FILE="$PROJECT_DIR/.ralphy/progress.txt"
 CLAUDE_FILE="$PROJECT_DIR/CLAUDE.md"
 
+# ============================================================================
+# CONTINUE MODE LOGIC
+# ============================================================================
+
+CONTINUE_CONTEXT=""
+if [[ "$CONTINUE_MODE" == "true" ]]; then
+    echo ""
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║     🔄 CONTINUE MODE - Letzte Session wiederherstellen          ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+
+    # Read last line from progress.txt
+    if [[ -f "$PROGRESS_FILE" ]]; then
+        LAST_ENTRY=$(tail -n 1 "$PROGRESS_FILE" 2>/dev/null || echo "")
+        if [[ -n "$LAST_ENTRY" ]]; then
+            echo "📋 Letzte Eintrag aus progress.txt:"
+            echo "$LAST_ENTRY"
+            echo ""
+
+            # Extract item info from the last entry
+            # Format: [YYYY-MM-DD HH:MM:SS] ITEM-ID: Title - Description
+            LAST_ITEM_ID=$(echo "$LAST_ENTRY" | grep -oP '\[\K[^\]]+' | head -1 | grep -oP 'ITEM-ID: \K[0-9.]+' || echo "")
+
+            # Get git diff to see what was changed
+            if git rev-parse --git-dir > /dev/null 2>&1; then
+                echo "🔍 Git Diff (nicht-committete Änderungen):"
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                GIT_DIFF=$(git diff 2>/dev/null || git diff HEAD 2>/dev/null || echo "Keine Änderungen gefunden")
+                if [[ -n "$GIT_DIFF" ]]; then
+                    echo "$GIT_DIFF"
+                else
+                    echo "Keine ungesicherten Änderungen gefunden."
+                fi
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo ""
+            fi
+
+            # Build continue context for prompt
+            CONTINUE_CONTEXT="
+## CONTINUE MODE
+
+Du arbeitest weiter an einer vorherigen Session die unterbrochen wurde.
+
+**Letzter Eintrag aus progress.txt:**
+$LAST_ENTRY
+
+**WICHTIG:**
+- Du musst weiter an dem zuletzt gewählten Item arbeiten (siehe oben)
+- Der Git Diff zeigt bereits durchgeführte aber nicht-committete Änderungen
+- Analysiere den Diff um zu verstehen was bereits gemacht wurde
+- Setze die Arbeit fort, fange nicht von vorne an!
+
+**Git Diff der nicht-committeten Änderungen:**
+\`\`\`diff
+$GIT_DIFF
+\`\`\`
+"
+        else
+            echo "⚠️  Keine Einträge in progress.txt gefunden. Starte normalen Modus..."
+            CONTINUE_MODE=""
+        fi
+    else
+        echo "⚠️  progress.txt nicht gefunden. Starte normalen Modus..."
+        CONTINUE_MODE=""
+    fi
+
+    echo ""
+    echo "Starte in 3 Sekunden... (Ctrl+C zum Abbrechen)"
+    sleep 3
+    clear
+fi
+
 for ((i=1; i<=MAX_ITERATIONS; i++)); do
     # Show iteration header only for non-opencode tools (opencode has its own header)
     if [[ "$TOOL" != "opencode" ]]; then
@@ -435,7 +514,8 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
             # Claude supports @-references
             FULL_PROMPT="@.ralphy/prd.json @.ralphy/progress.txt @CLAUDE.md @.ralphy/RALPHY_PROMPT.md
 ---
-${PERCEPTIONS}"
+${PERCEPTIONS}
+${CONTINUE_CONTEXT}"
             result=$($CMD $CMD_ARGS "$FULL_PROMPT" 2>&1) || true
             ;;
         opencode)
@@ -455,7 +535,8 @@ $(cat "$PROGRESS_FILE" 2>/dev/null || echo "⚠️  Datei nicht gefunden: $PROGR
 $(cat "$CLAUDE_FILE" 2>/dev/null || echo "⚠️  Datei nicht gefunden: $CLAUDE_FILE")
 
 ---
-${PERCEPTIONS}"
+${PERCEPTIONS}
+${CONTINUE_CONTEXT}"
             # Execute: opencode run -m MODEL "prompt with embedded files"
             # Start progress indicator in background with fixed header at top
             # Uses scroll region to keep header separate from log output
@@ -782,7 +863,8 @@ EOF
             # CCS: uses @-references like claude
             FULL_PROMPT="@.ralphy/prd.json @.ralphy/progress.txt @CLAUDE.md @.ralphy/RALPHY_PROMPT.md
 ---
-${PERCEPTIONS}"
+${PERCEPTIONS}
+${CONTINUE_CONTEXT}"
             result=$($CMD $CMD_ARGS "$FULL_PROMPT" 2>&1) || true
             ;;
     esac

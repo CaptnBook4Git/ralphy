@@ -1,6 +1,6 @@
 # Project Progress Tracker
 # This file tracks the progress of the Ralphy Loop
-# Format: Date | Item ID | Status | Notes
+# Format: [YYYY-MM-DD HH:MM:SS] ITEM-ID: Title - Description
 
 ============================================
 CURRENT STATUS: Initialization

@@ -41,7 +41,7 @@
 
 4.  **Verify Installation**:
     ```bash
-    ralphy --version
+    ralphy.sh --version
     ```
 
 ---
@@ -49,37 +49,37 @@
 ## 📖 Usage
 
 ### Initializing a Project
-Go to any project folder and run `ralphy`. If no configuration is found, Ralphy will offer to initialize it for you with templates (`docs/prd.json`, `docs/progress.txt`, etc.).
+Go to any project folder and run `ralphy.sh`. If no configuration is found, Ralphy will offer to initialize it for you with templates (`docs/prd.json`, `docs/progress.txt`, etc.).
 
 ```bash
 cd my-new-project
-ralphy
+ralphy.sh
 ```
 
 ### Running the Loop
 
 **Standard Mode (Claude Code Default):**
 ```bash
-ralphy              # Run 10 iterations using default Claude Code
-ralphy 20           # Run 20 iterations
+ralphy.sh              # Run 10 iterations using default Claude Code
+ralphy.sh 20           # Run 20 iterations
 ```
 
 **OpenCode / Antigravity Mode:**
 Perfect for using **Gemini 3 Pro** or **Claude Opus 4.5** via Antigravity.
 
 ```bash
-ralphy --oc-gemini 15       # OpenCode + Gemini 3 Pro (15 iterations)
-ralphy --oc-gemini-low 15   # OpenCode + Gemini 3 Pro (Low Thinking)
-ralphy --oc-agy 10          # OpenCode + Antigravity Claude Sonnet 4.5
-ralphy --oc-agy-opus 5      # OpenCode + Antigravity Claude Opus 4.5 (Thinking)
+ralphy.sh --oc-gemini 15       # OpenCode + Gemini 3 Pro (15 iterations)
+ralphy.sh --oc-gemini-low 15   # OpenCode + Gemini 3 Pro (Low Thinking)
+ralphy.sh --oc-agy 10          # OpenCode + Antigravity Claude Sonnet 4.5
+ralphy.sh --oc-agy-opus 5      # OpenCode + Antigravity Claude Opus 4.5 (Thinking)
 ```
 
 **CCS (Claude Code Switch) Mode:**
 Use cheaper or specialized models via CCS.
 
 ```bash
-ralphy --ccs-glm 50         # GLM 4.6 (Cost effective for overnight loops)
-ralphy --ccs-glmt 10        # GLM 4.6 + Thinking
+ralphy.sh --ccs-glm 50         # GLM 4.6 (Cost effective for overnight loops)
+ralphy.sh --ccs-glmt 10        # GLM 4.6 + Thinking
 ```
 
 ---

@@ -49,7 +49,7 @@
 ## 📖 Usage
 
 ### Initializing a Project
-Go to any project folder and run `ralphy.sh`. If no configuration is found, Ralphy will offer to initialize it for you with templates (`docs/prd.json`, `docs/progress.txt`, etc.).
+Go to any project folder and run `ralphy.sh`. If no configuration is found, Ralphy will offer to initialize it for you with templates (`.ralphy/prd.json`, `.ralphy/progress.txt`, etc.).
 
 ```bash
 cd my-new-project
@@ -106,12 +106,12 @@ Ralphy enforces a strict disciplined workflow for the AI agent:
 
 ## 📁 Configuration
 
-Ralphy relies on a `docs/` folder in your project root:
+Ralphy relies on a `.ralphy/` folder in your project root:
 
-*   `docs/prd.json`: Your product requirements database (JSON format).
-*   `docs/progress.txt`: A chronological log of all changes made by the agent.
-*   `docs/RALPHY_PROMPT.md`: The system prompt used for the loop (customizable).
-*   `docs/important-perceptions.md`: A "Do's and Don'ts" file that the agent updates itself to learn from mistakes.
+*   `.ralphy/prd.json`: Your product requirements database (JSON format).
+*   `.ralphy/progress.txt`: A chronological log of all changes made by the agent.
+*   `.ralphy/RALPHY_PROMPT.md`: The system prompt used for the loop (customizable).
+*   `.ralphy/important-perceptions.md`: A "Do's and Don'ts" file that the agent updates itself to learn from mistakes.
 
 ---
 

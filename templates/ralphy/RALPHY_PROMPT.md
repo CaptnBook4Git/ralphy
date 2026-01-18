@@ -54,8 +54,8 @@ Du bist ein erfahrener Software-Entwickler.
    - Fahre NICHT fort wenn einer dieser Schritte fehlschlägt. Behebe zuerst den Fehler.
 
 5. **Fortschritt dokumentieren**:
-   - Aktualisiere docs/progress.txt mit dem was du getan hast
-   - Setze `passes: true` für das erledigte Item in prd.json
+    - Aktualisiere .ralphy/progress.txt mit dem was du getan hast
+    - Setze `passes: true` für das erledigte Item in prd.json
 
 6. **Git Commit erstellen**:
    - `git add -A && git commit -m "feat: [kurze Beschreibung]"`
@@ -85,7 +85,7 @@ ralphy 10
 ```
 
 ```
-@docs/prd.json @docs/progress.txt @CLAUDE.md
+@.ralphy/prd.json @.ralphy/progress.txt @CLAUDE.md
 
 Du bist ein autonomer Entwickler der systematisch Features implementiert.
 

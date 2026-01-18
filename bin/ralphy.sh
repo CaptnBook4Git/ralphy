@@ -48,15 +48,16 @@ export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/bin:$PATH"
 # INITIALIZATION CHECK
 # ============================================================================
 
-if [[ ! -f "$PROJECT_DIR/docs/prd.json" ]]; then
+if [[ ! -f "$PROJECT_DIR/.ralphy/prd.json" ]]; then
     echo "╔════════════════════════════════════════════════════════════╗"
     echo "║     👋 Willkommen bei Ralphy Wiggum!                        ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo ""
     echo "Es sieht so aus, als ob dieses Projekt noch nicht für Ralphy konfiguriert ist."
-    echo "Keine 'docs/prd.json' gefunden."
+    echo "Keine '.ralphy/prd.json' gefunden."
     echo ""
-    read -p "Möchtest du Ralphy für dieses Projekt initialisieren? (y/N) " -n 1 -r
+    echo "Möchtest du Ralphy für dieses Projekt initialisieren? (y/N) "
+    read -p "" -n 1 -r
     echo ""
 
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -68,16 +69,16 @@ if [[ ! -f "$PROJECT_DIR/docs/prd.json" ]]; then
     echo "🚀 Initialisiere Ralphy..."
 
     # Create directories
-    mkdir -p "$PROJECT_DIR/docs"
+    mkdir -p "$PROJECT_DIR/.ralphy"
 
     # Copy templates
     TEMPLATE_DIR="$SCRIPT_DIR/../templates"
 
     if [[ -d "$TEMPLATE_DIR" ]]; then
         echo "Kopiere Templates..."
-        cp "$TEMPLATE_DIR/docs/prd.json" "$PROJECT_DIR/docs/prd.json"
-        cp "$TEMPLATE_DIR/docs/progress.txt" "$PROJECT_DIR/docs/progress.txt"
-        cp "$TEMPLATE_DIR/docs/RALPHY_PROMPT.md" "$PROJECT_DIR/docs/RALPHY_PROMPT.md"
+        cp "$TEMPLATE_DIR/ralphy/prd.json" "$PROJECT_DIR/.ralphy/prd.json"
+        cp "$TEMPLATE_DIR/ralphy/progress.txt" "$PROJECT_DIR/.ralphy/progress.txt"
+        cp "$TEMPLATE_DIR/ralphy/RALPHY_PROMPT.md" "$PROJECT_DIR/.ralphy/RALPHY_PROMPT.md"
 
         # Only copy CLAUDE.md if it doesn't exist
         if [[ ! -f "$PROJECT_DIR/CLAUDE.md" ]]; then
@@ -87,7 +88,7 @@ if [[ ! -f "$PROJECT_DIR/docs/prd.json" ]]; then
         fi
 
         echo "✅ Initialisierung abgeschlossen!"
-        echo "Bitte bearbeite 'docs/prd.json' und passe es an dein Projekt an."
+        echo "Bitte bearbeite '.ralphy/prd.json' und passe es an dein Projekt an."
         echo ""
         exit 0
     else
@@ -335,8 +336,8 @@ echo "🤖 Provider:    $PROVIDER_DISPLAY"
 echo "🔢 Iterationen: $MAX_ITERATIONS"
 echo "⚡ Command:     $CMD $CMD_ARGS \"...\""
 echo ""
-echo "📋 PRD:         docs/prd.json"
-echo "📝 Progress:    docs/progress.txt"
+echo "📋 PRD:         .ralphy/prd.json"
+echo "📝 Progress:    .ralphy/progress.txt"
 echo ""
 
 # Check if required command is installed
@@ -390,15 +391,15 @@ cd "$PROJECT_DIR"
 # ============================================================================
 
 # Load prompt from file or use default if missing (but it should exist due to check above)
-if [[ -f "docs/RALPHY_PROMPT.md" ]]; then
+if [[ -f ".ralphy/RALPHY_PROMPT.md" ]]; then
     # Read the file content, but only up to the "---" separator if we want to extract just the prompt part
     # Actually, let's just use the whole file content or a specific section?
     # For now, let's assume the user wants the whole context in the prompt file.
     # But wait, the original script had a hardcoded base prompt.
     # We should probably read the file content.
-    RALPHY_PROMPT_BASE=$(cat "docs/RALPHY_PROMPT.md")
+    RALPHY_PROMPT_BASE=$(cat ".ralphy/RALPHY_PROMPT.md")
 else
-    echo "⚠️  docs/RALPHY_PROMPT.md nicht gefunden! Nutze Fallback."
+    echo "⚠️  .ralphy/RALPHY_PROMPT.md nicht gefunden! Nutze Fallback."
     RALPHY_PROMPT_BASE='WICHTIG: Du musst in dieser Session CODE SCHREIBEN und COMMITTEN.'
 fi
 
@@ -406,9 +407,9 @@ fi
 # MAIN LOOP
 # ============================================================================
 
-PERCEPTIONS_FILE="$PROJECT_DIR/docs/important-perceptions.md"
-PRD_FILE="$PROJECT_DIR/docs/prd.json"
-PROGRESS_FILE="$PROJECT_DIR/docs/progress.txt"
+PERCEPTIONS_FILE="$PROJECT_DIR/.ralphy/important-perceptions.md"
+PRD_FILE="$PROJECT_DIR/.ralphy/prd.json"
+PROGRESS_FILE="$PROJECT_DIR/.ralphy/progress.txt"
 CLAUDE_FILE="$PROJECT_DIR/CLAUDE.md"
 
 for ((i=1; i<=MAX_ITERATIONS; i++)); do
@@ -431,7 +432,7 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
     case $TOOL in
         claude)
             # Claude supports @-references
-            FULL_PROMPT="@docs/prd.json @docs/progress.txt @CLAUDE.md @docs/RALPHY_PROMPT.md
+            FULL_PROMPT="@.ralphy/prd.json @.ralphy/progress.txt @CLAUDE.md @.ralphy/RALPHY_PROMPT.md
 ---
 ${PERCEPTIONS}"
             result=$($CMD $CMD_ARGS "$FULL_PROMPT" 2>&1) || true
@@ -778,7 +779,7 @@ EOF
             ;;
         ccs)
             # CCS: uses @-references like claude
-            FULL_PROMPT="@docs/prd.json @docs/progress.txt @CLAUDE.md @docs/RALPHY_PROMPT.md
+            FULL_PROMPT="@.ralphy/prd.json @.ralphy/progress.txt @CLAUDE.md @.ralphy/RALPHY_PROMPT.md
 ---
 ${PERCEPTIONS}"
             result=$($CMD $CMD_ARGS "$FULL_PROMPT" 2>&1) || true
@@ -814,7 +815,7 @@ ${PERCEPTIONS}"
         echo "Provider: $PROVIDER_DISPLAY"
         echo "Iterationen: $i von $MAX_ITERATIONS"
         echo ""
-        echo "Prüfe docs/progress.txt für Details."
+        echo "Prüfe .ralphy/progress.txt für Details."
         exit 0
     fi
 
@@ -832,4 +833,4 @@ echo "║  ⚠️  Max Iterationen erreicht ($MAX_ITERATIONS)                   
 echo "╚════════════════════════════════════════════════════════════╝"
 echo ""
 echo "Provider: $PROVIDER_DISPLAY"
-echo "Prüfe docs/progress.txt für aktuellen Stand."
+echo "Prüfe .ralphy/progress.txt für aktuellen Stand."

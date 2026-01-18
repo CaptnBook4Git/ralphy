@@ -1,0 +1,835 @@
+#!/bin/bash
+# ralphy - Ralphy Wiggum Loop für autonome AI-Entwicklung
+#
+# Unterstützt drei CLI-Tools: claude, ccs, opencode
+#
+# Usage: ralphy [OPTIONS] [max_iterations]
+
+VERSION="0.1"
+
+set -e
+
+# Global variable for progress PID
+PROGRESS_PID=""
+
+# Trap signals to clean up background processes
+cleanup() {
+    # Reset terminal scroll region first (in case it was modified)
+    printf "\033[r" >&2 2>/dev/null || true       # Reset scroll region
+    printf "\033[1;1H\033[K" >&2 2>/dev/null || true  # Clear status line
+    printf "\033[999;1H" >&2 2>/dev/null || true  # Move to bottom
+
+    echo ""
+    echo "🛑 Abbruch empfangen, räume auf..."
+    if [[ -n "$PROGRESS_PID" ]] && kill -0 "$PROGRESS_PID" 2>/dev/null; then
+        kill "$PROGRESS_PID" 2>/dev/null || true
+        wait "$PROGRESS_PID" 2>/dev/null || true
+    fi
+    exit 130  # Exit code 130 for SIGINT
+}
+trap cleanup SIGINT SIGTERM
+
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+
+# Script directory (where ralphy is installed)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Project directory is current working directory
+PROJECT_DIR="$(pwd)"
+
+DEFAULT_ITERATIONS=10
+PAUSE_SECONDS=5
+
+# Extend PATH to include common installation directories
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/bin:$PATH"
+
+# ============================================================================
+# INITIALIZATION CHECK
+# ============================================================================
+
+if [[ ! -f "$PROJECT_DIR/docs/prd.json" ]]; then
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║     👋 Willkommen bei Ralphy Wiggum!                        ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "Es sieht so aus, als ob dieses Projekt noch nicht für Ralphy konfiguriert ist."
+    echo "Keine 'docs/prd.json' gefunden."
+    echo ""
+    read -p "Möchtest du Ralphy für dieses Projekt initialisieren? (y/N) " -n 1 -r
+    echo ""
+
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Abbruch. Ralphy benötigt eine Konfiguration."
+        exit 1
+    fi
+
+    echo ""
+    echo "🚀 Initialisiere Ralphy..."
+
+    # Create directories
+    mkdir -p "$PROJECT_DIR/docs"
+
+    # Copy templates
+    TEMPLATE_DIR="$SCRIPT_DIR/../templates"
+
+    if [[ -d "$TEMPLATE_DIR" ]]; then
+        echo "Kopiere Templates..."
+        cp "$TEMPLATE_DIR/docs/prd.json" "$PROJECT_DIR/docs/prd.json"
+        cp "$TEMPLATE_DIR/docs/progress.txt" "$PROJECT_DIR/docs/progress.txt"
+        cp "$TEMPLATE_DIR/docs/RALPHY_PROMPT.md" "$PROJECT_DIR/docs/RALPHY_PROMPT.md"
+
+        # Only copy CLAUDE.md if it doesn't exist
+        if [[ ! -f "$PROJECT_DIR/CLAUDE.md" ]]; then
+            cp "$TEMPLATE_DIR/CLAUDE.md" "$PROJECT_DIR/CLAUDE.md"
+        else
+            echo "⚠️  CLAUDE.md existiert bereits, überspringe..."
+        fi
+
+        echo "✅ Initialisierung abgeschlossen!"
+        echo "Bitte bearbeite 'docs/prd.json' und passe es an dein Projekt an."
+        echo ""
+        exit 0
+    else
+        echo "❌ FEHLER: Templates nicht gefunden unter $TEMPLATE_DIR"
+        exit 1
+    fi
+fi
+
+# ============================================================================
+# ARGUMENT PARSING
+# ============================================================================
+
+TOOL=""           # claude, ccs, opencode
+PROVIDER=""       # Provider name
+MODEL=""          # Model for opencode
+VARIANT=""        # Variant for opencode (e.g., low, high)
+MAX_ITERATIONS=""
+
+show_help() {
+    echo "Ralphy Wiggum Loop - Autonome AI-Entwicklung"
+    echo ""
+    echo "Usage: ralphy [OPTIONS] [max_iterations]"
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════════╗"
+    echo "║ Claude (Default) - Anthropic Subscription                        ║"
+    echo "╠══════════════════════════════════════════════════════════════════╣"
+    echo "║ ralphy 10                        # Claude direkt, 10 Iterationen  ║"
+    echo "╚══════════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════════╗"
+    echo "║ OpenCode Provider (--oc-*)                                       ║"
+    echo "╠══════════════════════════════════════════════════════════════════╣"
+    echo "║ --oc-gemini     Antigravity Gemini 3 Pro                        ║"
+    echo "║ --oc-gemini-low Antigravity Gemini 3 Pro (low thinking)        ║"
+    echo "║ --oc-flash      Antigravity Gemini 3 Flash (schneller)          ║"
+    echo "║ --oc-agy        Antigravity Claude Sonnet 4.5                    ║"
+    echo "║ --oc-agy-opus   Antigravity Claude Opus 4.5 + Thinking           ║"
+    echo "║ --oc-glm        Z.AI GLM 4.6                                     ║"
+    echo "║ --oc-glm7       Z.AI GLM 4.7 (newest)                            ║"
+    echo "║ --oc-cerebras   Cerebras GLM 4.7 (fast inference)                ║"
+    echo "╚══════════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════════╗"
+    echo "║ CCS Provider (--ccs-*)                                           ║"
+    echo "╠══════════════════════════════════════════════════════════════════╣"
+    echo "║ --ccs-glm       Z.AI GLM                                         ║"
+    echo "║ --ccs-glmt      Z.AI GLM + Thinking                              ║"
+    echo "║ --ccs-agy       Antigravity                                      ║"
+    echo "║ --ccs-gemini    Google Gemini                                    ║"
+    echo "║ --ccs-codex     OpenAI Codex                                     ║"
+    echo "║ --ccs-kimi      Kimi                                             ║"
+    echo "║ --ccs-qwen      Qwen                                             ║"
+    echo "╚══════════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "Weitere Optionen:"
+    echo "  -h, --help    Diese Hilfe anzeigen"
+    echo "  --list        Verfügbare Provider anzeigen"
+    echo "  -v, --version Version anzeigen"
+    echo ""
+}
+
+show_providers() {
+    echo "╔════════════════════════════════════════════════════════════════════╗"
+    echo "║             Verfügbare Provider (verbundene Accounts)             ║"
+    echo "╠════════════════════════════════════════════════════════════════════╣"
+    echo "║                                                                    ║"
+    echo "║ OPENCODE (opencode auth list):                                     ║"
+    echo "║   Google (OAuth):      antigravity-gemini-3-pro, antigravity-gemini-3-flash ║"
+    echo "║                        antigravity-claude-opus/sonnet-4.5         ║"
+    echo "║   Z.AI Coding (API):   glm-4.6, glm-4.7                           ║"
+    echo "║   Cerebras (API):      zai-glm-4.7, qwen-3-235b                   ║"
+    echo "║                                                                    ║"
+    echo "║ CCS (ccs):                                                         ║"
+    echo "║   OAuth:               gemini, codex, agy                          ║"
+    echo "║   API-Key:             glm, glmt, kimi, qwen                       ║"
+    echo "║                                                                    ║"
+    echo "╚════════════════════════════════════════════════════════════════════╝"
+}
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        --list)
+            show_providers
+            exit 0
+            ;;
+        -v|--version)
+            echo "ralphy version $VERSION"
+            exit 0
+            ;;
+        # Claude default
+        --default)
+            TOOL="claude"
+            shift
+            ;;
+        # OpenCode providers
+        --oc-gemini)
+            TOOL="opencode"
+            PROVIDER="gemini"
+            MODEL="google/antigravity-gemini-3-pro"
+            shift
+            ;;
+        --oc-gemini-low)
+            TOOL="opencode"
+            PROVIDER="gemini-low"
+            MODEL="google/antigravity-gemini-3-pro"
+            VARIANT="low"
+            shift
+            ;;
+        --oc-flash)
+            TOOL="opencode"
+            PROVIDER="flash"
+            MODEL="google/antigravity-gemini-3-flash"
+            shift
+            ;;
+        --oc-agy)
+            TOOL="opencode"
+            PROVIDER="agy"
+            MODEL="google/antigravity-claude-sonnet-4-5"
+            shift
+            ;;
+        --oc-agy-opus)
+            TOOL="opencode"
+            PROVIDER="agy-opus"
+            MODEL="google/antigravity-claude-opus-4-5-thinking"
+            shift
+            ;;
+        --oc-glm)
+            TOOL="opencode"
+            PROVIDER="glm"
+            MODEL="zai-coding-plan/glm-4.6"
+            shift
+            ;;
+        --oc-glm7)
+            TOOL="opencode"
+            PROVIDER="glm7"
+            MODEL="zai-coding-plan/glm-4.7"
+            shift
+            ;;
+        --oc-cerebras)
+            TOOL="opencode"
+            PROVIDER="cerebras"
+            MODEL="cerebras/zai-glm-4.7"
+            shift
+            ;;
+        # CCS providers
+        --ccs-glm)
+            TOOL="ccs"
+            PROVIDER="glm"
+            shift
+            ;;
+        --ccs-glmt)
+            TOOL="ccs"
+            PROVIDER="glmt"
+            shift
+            ;;
+        --ccs-agy)
+            TOOL="ccs"
+            PROVIDER="agy"
+            shift
+            ;;
+        --ccs-gemini)
+            TOOL="ccs"
+            PROVIDER="gemini"
+            shift
+            ;;
+        --ccs-codex)
+            TOOL="ccs"
+            PROVIDER="codex"
+            shift
+            ;;
+        --ccs-kimi)
+            TOOL="ccs"
+            PROVIDER="kimi"
+            shift
+            ;;
+        --ccs-qwen)
+            TOOL="ccs"
+            PROVIDER="qwen"
+            shift
+            ;;
+        # Numeric = iterations
+        [0-9]*)
+            MAX_ITERATIONS="$1"
+            shift
+            ;;
+        *)
+            echo "Unbekannte Option: $1"
+            echo "Nutze --help für Hilfe."
+            exit 1
+            ;;
+    esac
+done
+
+# Set defaults
+TOOL=${TOOL:-claude}
+MAX_ITERATIONS=${MAX_ITERATIONS:-$DEFAULT_ITERATIONS}
+
+# Build command based on tool
+case $TOOL in
+    claude)
+        CMD="claude"
+        CMD_ARGS="--print"
+        PROVIDER_DISPLAY="Claude (direkt)"
+        ;;
+    opencode)
+        # Use the found opencode path (if set during check), otherwise default to "opencode"
+        CMD="${OPENCODE_FULL_PATH:-opencode}"
+        if [[ -n "$VARIANT" ]]; then
+            CMD_ARGS="run -m $MODEL --variant=$VARIANT"
+            PROVIDER_DISPLAY="OpenCode: $PROVIDER ($MODEL, variant: $VARIANT)"
+        else
+            CMD_ARGS="run -m $MODEL"
+            PROVIDER_DISPLAY="OpenCode: $PROVIDER ($MODEL)"
+        fi
+        ;;
+    ccs)
+        CMD="ccs"
+        CMD_ARGS="$PROVIDER -p"
+        PROVIDER_DISPLAY="CCS: $PROVIDER"
+        ;;
+esac
+
+# ============================================================================
+# HEADER
+# ============================================================================
+
+# Clear screen for fresh start
+clear
+
+# Record global start time for total elapsed tracking
+GLOBAL_START_TIME=$(date +%s)
+export GLOBAL_START_TIME
+
+echo "╔════════════════════════════════════════════════════════════╗"
+echo "║     🔄 Ralphy Wiggum Loop v$VERSION                                ║"
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+echo "📁 Projekt:     $PROJECT_DIR"
+echo "🤖 Provider:    $PROVIDER_DISPLAY"
+echo "🔢 Iterationen: $MAX_ITERATIONS"
+echo "⚡ Command:     $CMD $CMD_ARGS \"...\""
+echo ""
+echo "📋 PRD:         docs/prd.json"
+echo "📝 Progress:    docs/progress.txt"
+echo ""
+
+# Check if required command is installed
+case $TOOL in
+    claude)
+        if ! command -v claude &> /dev/null; then
+            echo "❌ FEHLER: claude ist nicht installiert!"
+            exit 1
+        fi
+        ;;
+    opencode)
+        # Try to find opencode - check common locations if not in PATH
+        OPENCODE_CMD=""
+        if command -v opencode &> /dev/null; then
+            OPENCODE_CMD="opencode"
+        elif [[ -f "$HOME/.local/bin/opencode" ]]; then
+            OPENCODE_CMD="$HOME/.local/bin/opencode"
+        elif [[ -f "$HOME/.cargo/bin/opencode" ]]; then
+            OPENCODE_CMD="$HOME/.cargo/bin/opencode"
+        elif [[ -f "$HOME/bin/opencode" ]]; then
+            OPENCODE_CMD="$HOME/bin/opencode"
+        else
+            echo "❌ FEHLER: opencode ist nicht installiert oder nicht im PATH!"
+            echo "Gefundener PATH: $PATH"
+            echo "Installiere mit: curl -fsSL https://opencode.ai/install | bash"
+            echo "Oder füge das Installationsverzeichnis zum PATH hinzu."
+            exit 1
+        fi
+        # Update CMD to use found path (will be used later)
+        OPENCODE_FULL_PATH="$OPENCODE_CMD"
+        ;;
+    ccs)
+        if ! command -v ccs &> /dev/null; then
+            echo "❌ FEHLER: ccs ist nicht installiert!"
+            echo "Installiere mit: npm install -g @kaitranntt/ccs"
+            exit 1
+        fi
+        ;;
+esac
+
+echo "Starte in 3 Sekunden... (Ctrl+C zum Abbrechen)"
+sleep 3
+
+# Clear screen before starting the loop
+clear
+
+cd "$PROJECT_DIR"
+
+# ============================================================================
+# RALPHY PROMPT LOADING
+# ============================================================================
+
+# Load prompt from file or use default if missing (but it should exist due to check above)
+if [[ -f "docs/RALPHY_PROMPT.md" ]]; then
+    # Read the file content, but only up to the "---" separator if we want to extract just the prompt part
+    # Actually, let's just use the whole file content or a specific section?
+    # For now, let's assume the user wants the whole context in the prompt file.
+    # But wait, the original script had a hardcoded base prompt.
+    # We should probably read the file content.
+    RALPHY_PROMPT_BASE=$(cat "docs/RALPHY_PROMPT.md")
+else
+    echo "⚠️  docs/RALPHY_PROMPT.md nicht gefunden! Nutze Fallback."
+    RALPHY_PROMPT_BASE='WICHTIG: Du musst in dieser Session CODE SCHREIBEN und COMMITTEN.'
+fi
+
+# ============================================================================
+# MAIN LOOP
+# ============================================================================
+
+PERCEPTIONS_FILE="$PROJECT_DIR/docs/important-perceptions.md"
+PRD_FILE="$PROJECT_DIR/docs/prd.json"
+PROGRESS_FILE="$PROJECT_DIR/docs/progress.txt"
+CLAUDE_FILE="$PROJECT_DIR/CLAUDE.md"
+
+for ((i=1; i<=MAX_ITERATIONS; i++)); do
+    # Show iteration header only for non-opencode tools (opencode has its own header)
+    if [[ "$TOOL" != "opencode" ]]; then
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "📍 Iteration $i von $MAX_ITERATIONS - $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+    fi
+
+    # Load perceptions
+    PERCEPTIONS=""
+    if [[ -f "$PERCEPTIONS_FILE" ]]; then
+        PERCEPTIONS=$(cat "$PERCEPTIONS_FILE")
+    fi
+
+    # Build the full prompt based on tool
+    case $TOOL in
+        claude)
+            # Claude supports @-references
+            FULL_PROMPT="@docs/prd.json @docs/progress.txt @CLAUDE.md @docs/RALPHY_PROMPT.md
+---
+${PERCEPTIONS}"
+            result=$($CMD $CMD_ARGS "$FULL_PROMPT" 2>&1) || true
+            ;;
+        opencode)
+            # OpenCode: read file contents and embed in prompt (like claude)
+            # OpenCode may not support -f flag as expected, so we read files directly
+            FULL_PROMPT="${RALPHY_PROMPT_BASE}
+
+## Dateien:
+
+### prd.json:
+$(cat "$PRD_FILE" 2>/dev/null || echo "⚠️  Datei nicht gefunden: $PRD_FILE")
+
+### progress.txt:
+$(cat "$PROGRESS_FILE" 2>/dev/null || echo "⚠️  Datei nicht gefunden: $PROGRESS_FILE")
+
+### CLAUDE.md:
+$(cat "$CLAUDE_FILE" 2>/dev/null || echo "⚠️  Datei nicht gefunden: $CLAUDE_FILE")
+
+---
+${PERCEPTIONS}"
+            # Execute: opencode run -m MODEL "prompt with embedded files"
+            # Start progress indicator in background with fixed header at top
+            # Uses scroll region to keep header separate from log output
+            TOOL_STATUS_FILE=$(mktemp)
+            TOOL_COUNT_FILE=$(mktemp)
+            echo "0 0 0 0" > "$TOOL_COUNT_FILE"  # read edit bash other
+
+            # Record iteration start time
+            ITERATION_START_TIME=$(date +%s)
+            export ITERATION_START_TIME
+
+            # Export file paths for subshells
+            export TOOL_STATUS_FILE TOOL_COUNT_FILE
+
+            # Get terminal dimensions
+            TERM_LINES=$(tput lines 2>/dev/null || echo 24)
+            TERM_COLS=$(tput cols 2>/dev/null || echo 80)
+            HEADER_LINES=5  # Number of lines reserved for header
+
+            # Format seconds to human readable time
+            format_time() {
+                local seconds="$1"
+                local hours=$((seconds / 3600))
+                local minutes=$(((seconds % 3600) / 60))
+                local secs=$((seconds % 60))
+
+                if [[ $hours -gt 0 ]]; then
+                    printf "%dh %dm %ds" "$hours" "$minutes" "$secs"
+                elif [[ $minutes -gt 0 ]]; then
+                    printf "%dm %ds" "$minutes" "$secs"
+                else
+                    printf "%ds" "$secs"
+                fi
+            }
+
+            # Draw status bar at bottom of terminal
+            draw_statusbar() {
+                local elapsed="$1"
+                local status="$2"
+                local phase="$3"
+                local reads="$4"
+                local edits="$5"
+                local bashes="$6"
+                local others="$7"
+                local total=$((reads + edits + bashes + others))
+                local iter_time="$(format_time $elapsed)"
+                local total_time="$(format_time $(($(date +%s) - GLOBAL_START_TIME)))"
+
+                # Phase icon and text
+                local phase_icon phase_text
+                case "$phase" in
+                    recherche)  phase_icon="🔍"; phase_text="\033[1;33mRecherche\033[0m" ;;
+                    implement)  phase_icon="⚙️ "; phase_text="\033[1;32mImplementierung\033[0m" ;;
+                    validate)   phase_icon="✅"; phase_text="\033[1;34mValidierung\033[0m" ;;
+                    commit)     phase_icon="📦"; phase_text="\033[1;35mCommit\033[0m" ;;
+                    *)          phase_icon="⏳"; phase_text="\033[1mArbeitet...\033[0m" ;;
+                esac
+
+                # Calculate bottom lines (3 lines)
+                local line1=$((TERM_LINES - 2))
+                local line2=$((TERM_LINES - 1))
+                local line3=$((TERM_LINES))
+
+                printf "\033[s" >&2
+
+                # Line 1: Iteration & Phase
+                printf "\033[%d;1H\033[K\033[1;36m📍 Iteration %d/%d\033[0m - %s %b" "$line1" "$i" "$MAX_ITERATIONS" "$phase_icon" "$phase_text" >&2
+
+                # Line 2: Timers
+                printf "\033[%d;1H\033[K\033[90m⏱️  %-8s - 🕐 Gesamt: %s\033[0m" "$line2" "$iter_time" "$total_time" >&2
+
+                # Line 3: Tools
+                printf "\033[%d;1H\033[K\033[90m📊 Tools: %-3d - 📖 %-3d - ✏️  %-3d - 💻 %-3d - 🔧 %-3d\033[0m" "$line3" "$total" "$reads" "$edits" "$bashes" "$others" >&2
+
+                printf "\033[u" >&2
+            }
+
+            # Setup: Set scroll region for top of terminal, reserve bottom for status
+            STATUSBAR_LINES=3
+            printf "\033[1;$((TERM_LINES - STATUSBAR_LINES))r" >&2   # Set scroll region (top to bottom-3)
+            # Don't reset cursor to top - let it continue from current position
+
+            # Draw initial status bar
+            draw_statusbar 0 "Startet..." "init" 0 0 0 0
+
+            echo "━━━ Iteration $i gestartet ━━━"
+
+            (
+                sleep 1  # Wait 1s before first update
+                counter=1
+                current_status="Startet..."
+                current_phase="init"
+                while true; do
+                    # Read current status
+                    if [[ -f "$TOOL_STATUS_FILE" ]]; then
+                        read -r new_status new_phase < "$TOOL_STATUS_FILE" 2>/dev/null || true
+                        [[ -n "$new_status" ]] && current_status="$new_status"
+                        [[ -n "$new_phase" ]] && current_phase="$new_phase"
+                    fi
+
+                    # Read tool counts
+                    reads=0 edits=0 bashes=0 others=0
+                    if [[ -f "$TOOL_COUNT_FILE" ]]; then
+                        read -r reads edits bashes others < "$TOOL_COUNT_FILE" 2>/dev/null || true
+                    fi
+
+                    # Update status bar
+                    draw_statusbar $((counter * 2)) "$current_status" "$current_phase" "${reads:-0}" "${edits:-0}" "${bashes:-0}" "${others:-0}"
+
+                    sleep 2
+                    counter=$((counter + 1))
+                done
+            ) &
+            PROGRESS_PID=$!
+            export PROGRESS_PID  # Make it available to trap handler
+
+            # Execute and capture output, displaying it in real-time
+            # Use a temp file and tee to both display and capture
+            # Use CMD_ARGS for consistency (includes -m MODEL)
+            TEMP_OUTPUT=$(mktemp)
+
+            # Execute command with auto-confirmation of "Allow once" permissions
+            # Simple approach: Use expect if available, otherwise just execute normally
+            # User can still manually confirm if needed
+            if command -v expect >/dev/null 2>&1; then
+                # Use expect script to auto-confirm permissions
+                expect << EOF | while IFS= read -r line; do
+set timeout -1
+spawn bash -c "$CMD $CMD_ARGS \"$FULL_PROMPT\""
+expect {
+    -re "Permission required.*Allow once" {
+        # Check if it's a Remove request outside project directory
+        set line \$expect_out(buffer)
+        if {[regexp -nocase {Remove|Delete} \$line] && ![string match "*$PROJECT_DIR*" \$line]} {
+            send_user "⚠️  Überspringe: Remove-Anfrage außerhalb des Projekts\\n"
+            interact
+            exp_continue
+        }
+        # Auto-confirm with Enter (Allow once is default)
+        send "\\r"
+        exp_continue
+    }
+    eof {
+        catch wait result
+        exit [lindex \$result 3]
+    }
+}
+EOF
+                    # Process line - update counts and status
+                    # Strip ANSI color codes for matching
+                    clean_line=$(echo "$line" | sed 's/\x1b\[[0-9;]*m//g')
+
+                    # Check for tool calls (format: |  ToolName  args)
+                    if [[ "$clean_line" =~ ^\|[[:space:]]+([A-Za-z_]+)[[:space:]]+(.*)$ ]]; then
+                        TOOL_TYPE="${BASH_REMATCH[1]}"
+                        TOOL_ARG="${BASH_REMATCH[2]}"
+
+                        # Read current counts
+                        read -r t_reads t_edits t_bashes t_others < "$TOOL_COUNT_FILE" 2>/dev/null || { t_reads=0; t_edits=0; t_bashes=0; t_others=0; }
+
+                        case "$TOOL_TYPE" in
+                            Read|read_file|Glob|Grep|grep|glob)
+                                t_reads=$((t_reads + 1))
+                                echo "$TOOL_ARG recherche" > "$TOOL_STATUS_FILE" 2>/dev/null || true
+                                ;;
+                            Edit|edit_file|search_replace)
+                                t_edits=$((t_edits + 1))
+                                echo "$TOOL_ARG implement" > "$TOOL_STATUS_FILE" 2>/dev/null || true
+                                ;;
+                            Write|write)
+                                t_edits=$((t_edits + 1))
+                                echo "$TOOL_ARG implement" > "$TOOL_STATUS_FILE" 2>/dev/null || true
+                                ;;
+                            Bash|bash|shell)
+                                t_bashes=$((t_bashes + 1))
+                                # Detect phase from bash command
+                                if echo "$TOOL_ARG" | grep -qiE "git commit|git add"; then
+                                    echo "$TOOL_ARG commit" > "$TOOL_STATUS_FILE" 2>/dev/null || true
+                                elif echo "$TOOL_ARG" | grep -qiE "flutter test|flutter analyze|pub get"; then
+                                    echo "$TOOL_ARG validate" > "$TOOL_STATUS_FILE" 2>/dev/null || true
+                                else
+                                    echo "$TOOL_ARG implement" > "$TOOL_STATUS_FILE" 2>/dev/null || true
+                                fi
+                                ;;
+                            webfetch|web_search|WebSearch|WebFetch)
+                                t_others=$((t_others + 1))
+                                echo "Web-Suche recherche" > "$TOOL_STATUS_FILE" 2>/dev/null || true
+                                ;;
+                            Todo|TodoWrite|todo|discard|extract)
+                                t_others=$((t_others + 1))
+                                echo "Planung implement" > "$TOOL_STATUS_FILE" 2>/dev/null || true
+                                ;;
+                            *)
+                                t_others=$((t_others + 1))
+                                echo "$TOOL_TYPE implement" > "$TOOL_STATUS_FILE" 2>/dev/null || true
+                                ;;
+                        esac
+
+                        # Update counts
+                        echo "$t_reads $t_edits $t_bashes $t_others" > "$TOOL_COUNT_FILE" 2>/dev/null || true
+                    fi
+                    # Always output the original line
+                    echo "$line"
+                done | tee "$TEMP_OUTPUT" || true
+            else
+                # Fallback: Execute normally (user will need to manually confirm)
+                $CMD $CMD_ARGS "$FULL_PROMPT" 2>&1 | while IFS= read -r line; do
+                    # Process line - update counts and status
+                    # Strip ANSI color codes for matching
+                    clean_line=$(echo "$line" | sed 's/\x1b\[[0-9;]*m//g')
+
+                    # Check for tool calls (format: |  ToolName  args)
+                    if [[ "$clean_line" =~ ^\|[[:space:]]+([A-Za-z_]+)[[:space:]]+(.*)$ ]]; then
+                        TOOL_TYPE="${BASH_REMATCH[1]}"
+                        TOOL_ARG="${BASH_REMATCH[2]}"
+
+                        # Read current counts
+                        read -r t_reads t_edits t_bashes t_others < "$TOOL_COUNT_FILE" 2>/dev/null || { t_reads=0; t_edits=0; t_bashes=0; t_others=0; }
+
+                        case "$TOOL_TYPE" in
+                            Read|read_file|Glob|Grep|grep|glob)
+                                t_reads=$((t_reads + 1))
+                                echo "$TOOL_ARG recherche" > "$TOOL_STATUS_FILE" 2>/dev/null || true
+                                ;;
+                            Edit|edit_file|search_replace)
+                                t_edits=$((t_edits + 1))
+                                echo "$TOOL_ARG implement" > "$TOOL_STATUS_FILE" 2>/dev/null || true
+                                ;;
+                            Write|write)
+                                t_edits=$((t_edits + 1))
+                                echo "$TOOL_ARG implement" > "$TOOL_STATUS_FILE" 2>/dev/null || true
+                                ;;
+                            Bash|bash|shell)
+                                t_bashes=$((t_bashes + 1))
+                                # Detect phase from bash command
+                                if echo "$TOOL_ARG" | grep -qiE "git commit|git add"; then
+                                    echo "$TOOL_ARG commit" > "$TOOL_STATUS_FILE" 2>/dev/null || true
+                                elif echo "$TOOL_ARG" | grep -qiE "flutter test|flutter analyze|pub get"; then
+                                    echo "$TOOL_ARG validate" > "$TOOL_STATUS_FILE" 2>/dev/null || true
+                                else
+                                    echo "$TOOL_ARG implement" > "$TOOL_STATUS_FILE" 2>/dev/null || true
+                                fi
+                                ;;
+                            webfetch|web_search|WebSearch|WebFetch)
+                                t_others=$((t_others + 1))
+                                echo "Web-Suche recherche" > "$TOOL_STATUS_FILE" 2>/dev/null || true
+                                ;;
+                            Todo|TodoWrite|todo|discard|extract)
+                                t_others=$((t_others + 1))
+                                echo "Planung implement" > "$TOOL_STATUS_FILE" 2>/dev/null || true
+                                ;;
+                            *)
+                                t_others=$((t_others + 1))
+                                echo "$TOOL_TYPE implement" > "$TOOL_STATUS_FILE" 2>/dev/null || true
+                                ;;
+                        esac
+
+                        # Update counts
+                        echo "$t_reads $t_edits $t_bashes $t_others" > "$TOOL_COUNT_FILE" 2>/dev/null || true
+                    fi
+                    # Always output the original line
+                    echo "$line"
+                done | tee "$TEMP_OUTPUT" || true
+            fi
+            EXIT_CODE=${PIPESTATUS[0]}
+            result=$(cat "$TEMP_OUTPUT" 2>/dev/null || echo "")
+            rm -f "$TEMP_OUTPUT"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+            # Kill progress indicator and reset terminal
+            if [[ -n "$PROGRESS_PID" ]]; then
+                kill "$PROGRESS_PID" 2>/dev/null || true
+                wait "$PROGRESS_PID" 2>/dev/null || true
+            fi
+            PROGRESS_PID=""
+
+            # Read final counts for summary
+            FINAL_READS=0 FINAL_EDITS=0 FINAL_BASHES=0 FINAL_OTHERS=0
+            if [[ -f "$TOOL_COUNT_FILE" ]]; then
+                read -r FINAL_READS FINAL_EDITS FINAL_BASHES FINAL_OTHERS < "$TOOL_COUNT_FILE" 2>/dev/null || true
+            fi
+            FINAL_TOTAL=$((FINAL_READS + FINAL_EDITS + FINAL_BASHES + FINAL_OTHERS))
+
+            rm -f "$TOOL_STATUS_FILE" "$TOOL_COUNT_FILE" 2>/dev/null || true
+
+            # Clear status bar but keep scroll region active
+            for ((line=TERM_LINES-STATUSBAR_LINES+1; line<=TERM_LINES; line++)); do
+                printf "\033[s\033[%d;1H\033[K\033[u" "$line" >&2
+            done
+
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "✅ OpenCode beendet (Exit Code: $EXIT_CODE)"
+            echo "📊 Tool-Statistik: $FINAL_TOTAL total │ 📖 Read: $FINAL_READS │ ✏️ Edit: $FINAL_EDITS │ 💻 Bash: $FINAL_BASHES │ 🔧 Other: $FINAL_OTHERS"
+
+            # Get token stats from opencode stats
+            STATS_OUTPUT=$(opencode stats --project "" --days 1 2>/dev/null || echo "")
+            if [[ -n "$STATS_OUTPUT" ]]; then
+                AVG_TOKENS=$(echo "$STATS_OUTPUT" | grep -oP 'Avg Tokens/Session\s+\K[\d.]+[KM]?' || echo "?")
+                TOTAL_COST=$(echo "$STATS_OUTPUT" | grep -oP 'Total Cost\s+\K\$[\d.]+' || echo "$0.00")
+                INPUT_TOKENS=$(echo "$STATS_OUTPUT" | grep -oP '│Input\s+\K[\d.]+[KM]?' || echo "?")
+                OUTPUT_TOKENS=$(echo "$STATS_OUTPUT" | grep -oP '│Output\s+\K[\d.]+[KM]?' || echo "?")
+                echo "💰 Tokens: ~$AVG_TOKENS avg │ In: $INPUT_TOKENS │ Out: $OUTPUT_TOKENS │ Kosten: $TOTAL_COST"
+            fi
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+            # Debug: Show result length and first/last lines if result is not empty
+            if [[ -z "$result" ]]; then
+                echo "⚠️  Warnung: OpenCode hat keine Ausgabe zurückgegeben (leere Antwort)"
+            else
+                RESULT_LENGTH=${#result}
+                echo "📊 Ausgabe-Länge: $RESULT_LENGTH Zeichen"
+                echo "📄 Erste 200 Zeichen:"
+                echo "${result:0:200}..."
+                echo ""
+                if [[ $RESULT_LENGTH -gt 400 ]]; then
+                    echo "📄 Letzte 200 Zeichen:"
+                    echo "...${result: -200}"
+                fi
+            fi
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            ;;
+        ccs)
+            # CCS: uses @-references like claude
+            FULL_PROMPT="@docs/prd.json @docs/progress.txt @CLAUDE.md @docs/RALPHY_PROMPT.md
+---
+${PERCEPTIONS}"
+            result=$($CMD $CMD_ARGS "$FULL_PROMPT" 2>&1) || true
+            ;;
+    esac
+
+    # Print result (already printed above for opencode, but print again for others)
+    if [[ "$TOOL" != "opencode" ]]; then
+        echo "$result"
+    fi
+
+    # Check for errors in result (but don't treat empty result as error - might be normal)
+    if [[ -n "$result" ]] && ([[ "$result" == *"Error:"* ]] || [[ "$result" == *"error"* ]] || [[ "$result" == *"FEHLER"* ]] || [[ "$result" == *"File not found"* ]]); then
+        echo ""
+        echo "⚠️  Warnung: Fehler in der Ausgabe erkannt. Weiter mit nächster Iteration..."
+        echo ""
+    elif [[ -z "$result" ]]; then
+        echo ""
+        echo "⚠️  Warnung: Keine Ausgabe von OpenCode erhalten (möglicherweise Timeout oder Fehler)."
+        echo "   Weiter mit nächster Iteration..."
+        echo ""
+    fi
+
+    # Check for completion (only if result contains the promise tag and no errors)
+    if [[ "$result" == *"<promise>COMPLETE</promise>"* ]] && [[ "$result" != *"Error:"* ]] && [[ "$result" != *"FEHLER"* ]]; then
+        # Reset scroll region before final output
+        printf "\033[r" >&2
+        echo ""
+        echo "╔════════════════════════════════════════════════════════════╗"
+        echo "║  ✅ PRD COMPLETE! Alle kritischen Features implementiert.  ║"
+        echo "╚════════════════════════════════════════════════════════════╝"
+        echo ""
+        echo "Provider: $PROVIDER_DISPLAY"
+        echo "Iterationen: $i von $MAX_ITERATIONS"
+        echo ""
+        echo "Prüfe docs/progress.txt für Details."
+        exit 0
+    fi
+
+    echo ""
+    echo "⏳ Pause vor nächster Iteration ($PAUSE_SECONDS Sekunden)..."
+    sleep $PAUSE_SECONDS
+done
+
+# Reset scroll region after loop ends
+printf "\033[r" >&2
+
+echo ""
+echo "╔════════════════════════════════════════════════════════════╗"
+echo "║  ⚠️  Max Iterationen erreicht ($MAX_ITERATIONS)                      ║"
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+echo "Provider: $PROVIDER_DISPLAY"
+echo "Prüfe docs/progress.txt für aktuellen Stand."

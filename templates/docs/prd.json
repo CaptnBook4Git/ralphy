@@ -1,0 +1,35 @@
+{
+  "project": "Your Project Name",
+  "version": "1.0.0",
+  "stop_condition": "All items with priority 'critical' and 'high' must have passes: true",
+  "items": [
+    {
+      "id": "INIT-001",
+      "category": "core",
+      "priority": "critical",
+      "description": "Project Setup",
+      "details": "Initial project setup and configuration.",
+      "verification_steps": [
+        "Project builds successfully",
+        "Tests pass",
+        "Basic structure is in place"
+      ],
+      "files_to_create": [],
+      "files_to_modify": [],
+      "passes": false
+    },
+    {
+      "id": "FEAT-001",
+      "category": "feature",
+      "priority": "high",
+      "description": "First Feature",
+      "details": "Implement the first key feature of the application.",
+      "verification_steps": [
+        "Feature works as expected",
+        "Unit tests are added"
+      ],
+      "dependencies": ["INIT-001"],
+      "passes": false
+    }
+  ]
+}

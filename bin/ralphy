@@ -79,6 +79,7 @@ if [[ ! -f "$PROJECT_DIR/.ralphy/prd.json" ]]; then
         cp "$TEMPLATE_DIR/ralphy/prd.json" "$PROJECT_DIR/.ralphy/prd.json"
         cp "$TEMPLATE_DIR/ralphy/progress.txt" "$PROJECT_DIR/.ralphy/progress.txt"
         cp "$TEMPLATE_DIR/ralphy/RALPHY_PROMPT.md" "$PROJECT_DIR/.ralphy/RALPHY_PROMPT.md"
+        cp "$TEMPLATE_DIR/ralphy/important-perceptions.md" "$PROJECT_DIR/.ralphy/important-perceptions.md"
 
         # Only copy CLAUDE.md if it doesn't exist
         if [[ ! -f "$PROJECT_DIR/CLAUDE.md" ]]; then

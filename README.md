@@ -25,7 +25,7 @@
 
 1.  **Clone the Repository** (or download the source):
     ```bash
-    git clone https://github.com/yourusername/ralphy.git ~/Code/ralphy
+    git clone https://github.com/CaptnBook4Git/ralphy.git ~/Code/ralphy
     ```
 
 2.  **Add to PATH**:

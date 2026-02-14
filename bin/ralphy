@@ -15,7 +15,7 @@ PROGRESS_PID=""
 # Trap signals to clean up background processes
 cleanup() {
     # Reset terminal scroll region first (in case it was modified)
-    printf "\033[r" >&2 2>/dev/null || true       # Reset scroll region
+    # printf "\033[r" >&2 2>/dev/null || true       # Reset scroll region
     printf "\033[1;1H\033[K" >&2 2>/dev/null || true  # Clear status line
     printf "\033[999;1H" >&2 2>/dev/null || true  # Move to bottom
 
@@ -45,10 +45,82 @@ PAUSE_SECONDS=5
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/bin:$PATH"
 
 # ============================================================================
+# SUBCOMMAND DETECTION (before init check)
+# ============================================================================
+
+SUBCOMMAND=""           # "create-prd" or empty
+GH_ISSUES_MODE=""       # true if --gh-issues
+GH_ISSUE_IDS=""         # "1,3,5" or empty (= all open)
+CREATE_PRD_AGENT=""     # Agent for PRD creation (default: build)
+SELECTED_AGENT=""       # Agent selected for GH-issue loop execution
+HAS_GH_ISSUES=""        # true if prd.json contains gh_issue_number fields
+
+if [[ "${1:-}" == "create-prd" ]]; then
+    SUBCOMMAND="create-prd"
+    shift
+
+    # Parse create-prd arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --gh-issues)
+                GH_ISSUES_MODE=true
+                shift
+                # Check if next arg is a comma-separated list of numbers
+                if [[ $# -gt 0 && "$1" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+                    GH_ISSUE_IDS="$1"
+                    shift
+                fi
+                ;;
+            --agent)
+                shift
+                if [[ $# -gt 0 ]]; then
+                    CREATE_PRD_AGENT="$1"
+                    shift
+                else
+                    echo "❌ FEHLER: --agent benötigt einen Agenten-Namen"
+                    exit 1
+                fi
+                ;;
+            -h|--help)
+                echo "Usage: ralphy create-prd --gh-issues [ISSUE_IDS] [--agent NAME]"
+                echo ""
+                echo "Erstellt eine .ralphy/prd.json aus GitHub Issues."
+                echo ""
+                echo "Optionen:"
+                echo "  --gh-issues [IDs]  GitHub Issues verwenden (alle offenen oder komma-separierte IDs)"
+                echo "  --agent NAME       Agent für PRD-Erstellung (Default: build)"
+                echo "  -h, --help         Diese Hilfe anzeigen"
+                echo ""
+                echo "Beispiele:"
+                echo "  ralphy create-prd --gh-issues              # Alle offenen Issues"
+                echo "  ralphy create-prd --gh-issues 1,3,5        # Nur Issues #1, #3, #5"
+                echo "  ralphy create-prd --gh-issues --agent build # Mit bestimmtem Agent"
+                exit 0
+                ;;
+            *)
+                echo "Unbekannte Option für create-prd: $1"
+                echo "Nutze 'ralphy create-prd --help' für Hilfe."
+                exit 1
+                ;;
+        esac
+    done
+
+    # Validate: --gh-issues is required for now
+    if [[ "$GH_ISSUES_MODE" != "true" ]]; then
+        echo "❌ FEHLER: create-prd benötigt --gh-issues Flag"
+        echo "Nutze 'ralphy create-prd --help' für Hilfe."
+        exit 1
+    fi
+
+    CREATE_PRD_AGENT="${CREATE_PRD_AGENT:-build}"
+fi
+
+# ============================================================================
 # INITIALIZATION CHECK
 # ============================================================================
 
-if [[ ! -f "$PROJECT_DIR/.ralphy/prd.json" ]]; then
+# Skip init check if we're creating a PRD (it will create the file)
+if [[ "$SUBCOMMAND" != "create-prd" ]] && [[ ! -f "$PROJECT_DIR/.ralphy/prd.json" ]]; then
     echo "╔════════════════════════════════════════════════════════════╗"
     echo "║     👋 Willkommen bei Ralphy Wiggum!                        ║"
     echo "╚════════════════════════════════════════════════════════════╝"
@@ -108,11 +180,27 @@ MODEL=""          # Model for opencode
 VARIANT=""        # Variant for opencode (e.g., low, high)
 MAX_ITERATIONS=""
 CONTINUE_MODE=""  # Continue from last session
+BUGFIX_MODE=""    # Bugfixing mode (uses bugs.json instead of prd.json)
 
 show_help() {
     echo "Ralphy Wiggum Loop - Autonome AI-Entwicklung"
     echo ""
     echo "Usage: ralphy [OPTIONS] [max_iterations]"
+    echo "       ralphy create-prd --gh-issues [IDs] [--agent NAME]"
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════════╗"
+    echo "║ SUBCOMMANDS                                                      ║"
+    echo "╠══════════════════════════════════════════════════════════════════╣"
+    echo "║ create-prd --gh-issues              Alle offenen Issues → prd.json ║"
+    echo "║ create-prd --gh-issues 1,3,5        Nur bestimmte Issues           ║"
+    echo "║ create-prd --gh-issues --agent NAME Bestimmter Agent (Def: build)  ║"
+    echo "╚══════════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════════╗"
+    echo "║ MODUS-AUSWAHL                                                    ║"
+    echo "╠══════════════════════════════════════════════════════════════════╣"
+    echo "║ --bugs, --bugfix  Bugfixing-Modus (nutzt bugs.json statt prd.json) ║"
+    echo "╚══════════════════════════════════════════════════════════════════╝"
     echo ""
     echo "╔══════════════════════════════════════════════════════════════════╗"
     echo "║ Claude (Default) - Anthropic Subscription                        ║"
@@ -150,6 +238,12 @@ show_help() {
     echo "  -h, --help      Diese Hilfe anzeigen"
     echo "  --list          Verfügbare Provider anzeigen"
     echo "  -v, --version   Version anzeigen"
+    echo ""
+    echo "GH-Issues Workflow:"
+    echo "  1. ralphy create-prd --gh-issues        # PRD aus GitHub Issues erstellen"
+    echo "  2. ralphy 10                             # Loop startet, erkennt GH-Issues automatisch"
+    echo "     → Interaktive Agent-Auswahl (z.B. qfixer)"
+    echo "     → Agent bearbeitet Issues automatisch"
     echo ""
 }
 
@@ -192,6 +286,12 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         # OpenCode providers
+        --oc)
+            TOOL="opencode"
+            PROVIDER="github-copilot"
+            MODEL="github-copilot/gemini-3-flash-preview"
+            shift
+            ;;
         --oc-gemini)
             TOOL="opencode"
             PROVIDER="gemini"
@@ -207,8 +307,8 @@ while [[ $# -gt 0 ]]; do
             ;;
         --oc-flash)
             TOOL="opencode"
-            PROVIDER="flash"
-            MODEL="google/antigravity-gemini-3-flash"
+            PROVIDER="github-copilot"
+            MODEL="github-copilot/gemini-3-flash-preview"
             shift
             ;;
         --oc-agy)
@@ -281,6 +381,10 @@ while [[ $# -gt 0 ]]; do
             CONTINUE_MODE=true
             shift
             ;;
+        --bugfix)
+            BUGFIX_MODE=true
+            shift
+            ;;
         # Numeric = iterations
         [0-9]*)
             MAX_ITERATIONS="$1"
@@ -297,6 +401,37 @@ done
 # Set defaults
 TOOL=${TOOL:-claude}
 MAX_ITERATIONS=${MAX_ITERATIONS:-$DEFAULT_ITERATIONS}
+
+# ============================================================================
+# BUGFIX MODE CHECK
+# ============================================================================
+
+if [[ "$BUGFIX_MODE" == "true" ]]; then
+    # Check if bugs.json exists
+    if [[ ! -f "$PROJECT_DIR/.ralphy/bugs.json" ]]; then
+        echo ""
+        echo "╔════════════════════════════════════════════════════════════╗"
+        echo "║     🐛 BUGFIX MODE                                        ║"
+        echo "╚════════════════════════════════════════════════════════════╝"
+        echo ""
+        echo "❌ FEHLER: bugs.json nicht gefunden unter $PROJECT_DIR/.ralphy/"
+        echo ""
+        echo "Bitte erstelle eine bugs.json Datei oder nutze das Template:"
+        echo "  cp templates/ralphy/bugs.json .ralphy/bugs.json"
+        echo ""
+        exit 1
+    fi
+
+    # Check if BUGFIX_PROMPT.md exists
+    if [[ ! -f "$PROJECT_DIR/.ralphy/BUGFIX_PROMPT.md" ]]; then
+        # Copy BUGFIX_PROMPT.md if it doesn't exist
+        TEMPLATE_DIR="$SCRIPT_DIR/../templates"
+        if [[ -f "$TEMPLATE_DIR/ralphy/BUGFIX_PROMPT.md" ]]; then
+            cp "$TEMPLATE_DIR/ralphy/BUGFIX_PROMPT.md" "$PROJECT_DIR/.ralphy/BUGFIX_PROMPT.md"
+            echo "✅ BUGFIX_PROMPT.md kopiert."
+        fi
+    fi
+fi
 
 # Build command based on tool
 case $TOOL in
@@ -328,24 +463,40 @@ esac
 # ============================================================================
 
 # Clear screen for fresh start
-clear
+# clear
 
 # Record global start time for total elapsed tracking
 GLOBAL_START_TIME=$(date +%s)
 export GLOBAL_START_TIME
 
-echo "╔════════════════════════════════════════════════════════════╗"
-echo "║     🔄 Ralphy Wiggum Loop v$VERSION                                ║"
-echo "╚════════════════════════════════════════════════════════════╝"
-echo ""
-echo "📁 Projekt:     $PROJECT_DIR"
-echo "🤖 Provider:    $PROVIDER_DISPLAY"
-echo "🔢 Iterationen: $MAX_ITERATIONS"
-echo "⚡ Command:     $CMD $CMD_ARGS \"...\""
-echo ""
-echo "📋 PRD:         .ralphy/prd.json"
-echo "📝 Progress:    .ralphy/progress.txt"
-echo ""
+# Display mode-specific header
+if [[ "$BUGFIX_MODE" == "true" ]]; then
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║     🐛 Bugfixing Mode v$VERSION                                ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "📁 Projekt:     $PROJECT_DIR"
+    echo "🤖 Provider:    $PROVIDER_DISPLAY"
+    echo "🔢 Iterationen: $MAX_ITERATIONS"
+    echo "⚡ Command:     $CMD $CMD_ARGS \"...\""
+    echo ""
+    echo "📋 Bugs:        .ralphy/bugs.json"
+    echo "📝 Progress:    .ralphy/progress.txt"
+    echo ""
+else
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║     🔄 Ralphy Wiggum Loop v$VERSION                                ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "📁 Projekt:     $PROJECT_DIR"
+    echo "🤖 Provider:    $PROVIDER_DISPLAY"
+    echo "🔢 Iterationen: $MAX_ITERATIONS"
+    echo "⚡ Command:     $CMD $CMD_ARGS \"...\""
+    echo ""
+    echo "📋 PRD:         .ralphy/prd.json"
+    echo "📝 Progress:    .ralphy/progress.txt"
+    echo ""
+fi
 
 # Check if required command is installed
 case $TOOL in
@@ -385,11 +536,155 @@ case $TOOL in
         ;;
 esac
 
+# ============================================================================
+# GH-ISSUES DETECTION & AGENT SELECTION
+# ============================================================================
+
+# Check if prd.json contains gh_issue_number fields
+if [[ -f "$PROJECT_DIR/.ralphy/prd.json" ]] && [[ "$BUGFIX_MODE" != "true" ]]; then
+    HAS_GH_ISSUES=$(python3 -c "
+import json, sys
+try:
+    with open('$PROJECT_DIR/.ralphy/prd.json') as f:
+        data = json.load(f)
+    items = data.get('items', [])
+    has_gh = any(item.get('gh_issue_number') for item in items)
+    print('true' if has_gh else 'false')
+except:
+    print('false')
+" 2>/dev/null || echo "false")
+fi
+
+if [[ "$HAS_GH_ISSUES" == "true" ]]; then
+    echo ""
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║  🐙 GitHub Issues erkannt! Agents auswählen:             ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+
+    # Load agents dynamically from opencode
+    OC_CMD="${OPENCODE_FULL_PATH:-opencode}"
+    AGENTS=()
+
+    if agent_list_output=$($OC_CMD agent list 2>/dev/null); then
+        while IFS= read -r line; do
+            # Strip ANSI codes
+            clean=$(echo "$line" | sed 's/\x1b\[[0-9;]*m//g')
+            # Agent lines match: "name (type)" at start of line (not indented)
+            agent_name=$(echo "$clean" | grep -oP '^[a-zA-Z][a-zA-Z0-9_-]+(?=\s+\()' 2>/dev/null || true)
+            if [[ -n "$agent_name" && "$agent_name" != "selector" ]]; then
+                AGENTS+=("$agent_name")
+            fi
+        done <<< "$agent_list_output"
+    fi
+
+    # Fallback if no agents found
+    if [[ ${#AGENTS[@]} -eq 0 ]]; then
+        AGENTS=("ralphy-fixer" "qfixer" "qfixer-agpl" "qfix-fast" "build" "oneshot")
+    fi
+
+    # Reusable arrow-key menu function
+    # Usage: select_agent "prompt_text" "default_agent_name"
+    # Sets MENU_RESULT to the selected agent name
+    select_agent_menu() {
+        local prompt_text="$1"
+        local default_name="$2"
+        local hint_text="${3:-}"
+
+        echo "$prompt_text"
+        echo ""
+
+        # Find default index
+        local default_idx=0
+        for idx in "${!AGENTS[@]}"; do
+            if [[ "${AGENTS[$idx]}" == "$default_name" ]]; then
+                default_idx=$idx
+                break
+            fi
+        done
+
+        local selected=$default_idx
+        while true; do
+            for idx in "${!AGENTS[@]}"; do
+                if [[ $idx -eq $selected ]]; then
+                    local line_label="  ❯ ${AGENTS[$idx]}"
+                    if [[ -n "$hint_text" && "${AGENTS[$idx]}" == "$default_name" ]]; then
+                        line_label+="  ($hint_text)"
+                    fi
+                    echo "$line_label"
+                else
+                    echo "    ${AGENTS[$idx]}"
+                fi
+            done
+
+            read -s -n1 key
+            case "$key" in
+                $'\x1b')
+                    read -s -n2 -t 0.1 seq || true
+                    case "$seq" in
+                        '[A') ((selected > 0)) && ((selected--)) || true ;;
+                        '[B') ((selected < ${#AGENTS[@]}-1)) && ((selected++)) || true ;;
+                    esac
+                    ;;
+                "") break ;;
+            esac
+
+            printf "\033[${#AGENTS[@]}A"
+        done
+
+        MENU_RESULT="${AGENTS[$selected]}"
+    }
+
+    # ── Selector-Agent (hidden) ──
+    # User requested a hidden selector agent with specific capabilities
+    SELECTOR_AGENT="selector"
+    echo ""
+    echo "  ✅ Selector: $SELECTOR_AGENT"
+    echo ""
+
+    # ── Primär-Agent auswählen ──
+    select_agent_menu \
+        "🔧 Primär-Agent (bearbeitet das Issue):" \
+        "ralphy-fixer" \
+        "empfohlen für Issue-Fixing"
+    SELECTED_AGENT="$MENU_RESULT"
+    echo ""
+    echo "  ✅ Primär:   $SELECTED_AGENT"
+    echo ""
+
+    # Force OpenCode usage if agents are selected but tool is still claude (default)
+    if [[ "$TOOL" == "claude" ]]; then
+        echo "⚠️  GitHub Issues Modus erfordert OpenCode. Wechsle zu 'opencode' (GitHub Copilot)..."
+        TOOL="opencode"
+        PROVIDER="github-copilot"
+        MODEL="github-copilot/gemini-3-flash-preview"
+
+        # Ensure opencode is found
+        OPENCODE_FULL_PATH="${OPENCODE_FULL_PATH:-}"
+        if [[ -z "$OPENCODE_FULL_PATH" ]]; then
+            if command -v opencode &> /dev/null; then
+                OPENCODE_FULL_PATH="opencode"
+            elif [[ -f "$HOME/.local/bin/opencode" ]]; then
+                OPENCODE_FULL_PATH="$HOME/.local/bin/opencode"
+            elif [[ -f "$HOME/.cargo/bin/opencode" ]]; then
+                OPENCODE_FULL_PATH="$HOME/.cargo/bin/opencode"
+            else
+                echo "❌ FEHLER: opencode nicht gefunden! Bitte installiere es oder nutze --oc-gemini."
+                exit 1
+            fi
+        fi
+
+        CMD="$OPENCODE_FULL_PATH"
+        CMD_ARGS="run -m $MODEL"
+        PROVIDER_DISPLAY="OpenCode: $PROVIDER ($MODEL) [Auto-Switched]"
+    fi
+fi
+
 echo "Starte in 3 Sekunden... (Ctrl+C zum Abbrechen)"
 sleep 3
 
 # Clear screen before starting the loop
-clear
+# clear
 
 cd "$PROJECT_DIR"
 
@@ -397,16 +692,329 @@ cd "$PROJECT_DIR"
 # RALPHY PROMPT LOADING
 # ============================================================================
 
-# Load prompt from file or use default if missing (but it should exist due to check above)
-if [[ -f ".ralphy/RALPHY_PROMPT.md" ]]; then
-    # Read the file content, but only up to the "---" separator if we want to extract just the prompt part
-    # Actually, let's just use the whole file content or a specific section?
-    # For now, let's assume the user wants the whole context in the prompt file.
-    # But wait, the original script had a hardcoded base prompt.
-    # We should probably read the file content.
-    RALPHY_PROMPT_BASE=$(cat ".ralphy/RALPHY_PROMPT.md")
+# Determine which prompt file to use based on mode
+if [[ "$BUGFIX_MODE" == "true" ]]; then
+    PROMPT_FILE=".ralphy/BUGFIX_PROMPT.md"
 else
-    echo "⚠️  .ralphy/RALPHY_PROMPT.md nicht gefunden! Nutze Fallback."
+    PROMPT_FILE=".ralphy/RALPHY_PROMPT.md"
+fi
+
+# Load prompt from file or use default if missing (but it should exist due to check above)
+if [[ -f "$PROMPT_FILE" ]]; then
+    RALPHY_PROMPT_BASE=$(cat "$PROMPT_FILE")
+else
+    echo "⚠️  $PROMPT_FILE nicht gefunden! Nutze Fallback."
+    RALPHY_PROMPT_BASE='WICHTIG: Du musst in dieser Session CODE SCHREIBEN UND COMMITTEN.'
+fi
+
+# ============================================================================
+# BUGFIXING HELPER FUNCTIONS
+# ============================================================================
+
+# Function to get next bug from bugs.json (highest priority, status=open)
+get_next_bug() {
+    local bugs_file="$1"
+
+    # Use python or jq to parse and filter bugs
+    if command -v python3 &> /dev/null; then
+        python3 -c "
+import json
+import sys
+
+try:
+    with open('$bugs_file', 'r') as f:
+        data = json.load(f)
+
+    # Priority order
+    priority_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+
+    # Filter and sort bugs
+    open_bugs = [
+        bug for bug in data.get('bugs', [])
+        if bug.get('status') == 'open'
+    ]
+
+    if not open_bugs:
+        print('NONE')
+        sys.exit(0)
+
+    # Sort by priority (critical first)
+    open_bugs.sort(key=lambda x: (
+        priority_order.get(x.get('priority', 'medium'), 99),
+        x.get('created', '')
+    ))
+
+    # Print next bug info
+    next_bug = open_bugs[0]
+    print(f\"{next_bug['id']}|{next_bug['title']}|{next_bug['priority']}|{next_bug['description']}\")
+except Exception as e:
+    print(f'ERROR: {e}')
+    sys.exit(1)
+"
+    elif command -v jq &> /dev/null; then
+        # Fallback to jq
+        jq -r '.bugs[] | select(.status == "open") | "\(.id)|\(.title)|\(.priority)|\(.description)"' "$bugs_file" 2>/dev/null | head -1
+    else
+        # Very basic fallback (grep and sed)
+        echo "ERROR: No python3 or jq available for bug parsing"
+    fi
+}
+
+# Function to update bug status to resolved
+resolve_bug() {
+    local bugs_file="$1"
+    local bug_id="$2"
+
+    if command -v python3 &> /dev/null; then
+        python3 -c "
+import json
+from datetime import datetime
+
+try:
+    with open('$bugs_file', 'r') as f:
+        data = json.load(f)
+
+    # Find and update bug
+    for bug in data.get('bugs', []):
+        if bug.get('id') == '$bug_id':
+            bug['status'] = 'resolved'
+            bug['resolved'] = datetime.now().strftime('%Y-%m-%d')
+            break
+
+    # Write back
+    with open('$bugs_file', 'w') as f:
+        json.dump(data, f, indent=2)
+
+    print('OK')
+except Exception as e:
+    print(f'ERROR: {e}')
+"
+    else
+        echo "ERROR: No python3 available for bug resolution"
+    fi
+}
+
+# ============================================================================
+# CREATE-PRD FROM GITHUB ISSUES
+# ============================================================================
+
+create_prd_from_issues() {
+    echo ""
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║     🐙 PRD aus GitHub Issues erstellen                    ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+
+    # Check prerequisites
+    if ! command -v gh &> /dev/null; then
+        echo "❌ FEHLER: gh (GitHub CLI) ist nicht installiert!"
+        echo "Installiere mit: https://cli.github.com/"
+        exit 1
+    fi
+
+    if ! git remote get-url origin &> /dev/null 2>&1; then
+        echo "❌ FEHLER: Kein git remote 'origin' gefunden!"
+        exit 1
+    fi
+
+    # Parse owner/repo from git remote
+    local remote_url
+    remote_url=$(git remote get-url origin 2>/dev/null)
+    local gh_repo
+    # Handle SSH and HTTPS URLs
+    gh_repo=$(echo "$remote_url" | sed -E 's#^(https?://github\.com/|git@github\.com:)##; s#\.git$##')
+
+    echo "📦 Repository: $gh_repo"
+    echo "🤖 Agent: $CREATE_PRD_AGENT"
+    echo ""
+
+    # Fetch issues
+    local issues_json=""
+    if [[ -n "$GH_ISSUE_IDS" ]]; then
+        echo "📋 Lade Issues: #${GH_ISSUE_IDS//,/, #}..."
+        local issue_array="["
+        local first=true
+        IFS=',' read -ra ISSUE_NUMS <<< "$GH_ISSUE_IDS"
+        for num in "${ISSUE_NUMS[@]}"; do
+            local issue_data
+            issue_data=$(gh issue view "$num" --repo "$gh_repo" --json number,title,body,labels 2>/dev/null)
+            if [[ $? -ne 0 || -z "$issue_data" ]]; then
+                echo "⚠️  Issue #$num nicht gefunden oder Fehler beim Laden, überspringe..."
+                continue
+            fi
+            if [[ "$first" == "true" ]]; then
+                first=false
+            else
+                issue_array+=","
+            fi
+            issue_array+="$issue_data"
+        done
+        issue_array+="]"
+        issues_json="$issue_array"
+    else
+        echo "📋 Lade alle offenen Issues..."
+        issues_json=$(gh issue list --repo "$gh_repo" --state open --json number,title,body,labels --limit 100 2>/dev/null)
+        if [[ $? -ne 0 || -z "$issues_json" || "$issues_json" == "[]" ]]; then
+            echo "❌ FEHLER: Keine offenen Issues gefunden oder Fehler beim Laden!"
+            exit 1
+        fi
+    fi
+
+    local issue_count
+    issue_count=$(echo "$issues_json" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+    echo "✅ $issue_count Issues geladen."
+    echo ""
+
+    if [[ "$issue_count" == "0" ]]; then
+        echo "❌ Keine Issues zum Verarbeiten gefunden."
+        exit 1
+    fi
+
+    # Check if prd.json already exists
+    mkdir -p "$PROJECT_DIR/.ralphy"
+    if [[ -f "$PROJECT_DIR/.ralphy/prd.json" ]]; then
+        echo "⚠️  .ralphy/prd.json existiert bereits."
+        read -p "Überschreiben? (y/N) " -n 1 -r
+        echo ""
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo "Abbruch."
+            exit 0
+        fi
+    fi
+
+    # Build prompt for the agent
+    local prd_prompt
+    prd_prompt="Erstelle eine .ralphy/prd.json Datei aus den folgenden GitHub Issues.
+
+## GitHub Issues (JSON):
+$issues_json
+
+## Gewünschtes prd.json Schema:
+Die Datei soll unter .ralphy/prd.json geschrieben werden. Format:
+{
+  \"project_name\": \"$(basename "$PROJECT_DIR")\",
+  \"version\": \"1.0\",
+  \"items\": [
+    {
+      \"id\": \"GH-042\",
+      \"gh_issue_number\": 42,
+      \"category\": \"feature|bugfix|enhancement|refactor\",
+      \"priority\": \"critical|high|medium|low\",
+      \"description\": \"Issue-Titel\",
+      \"details\": \"Issue-Body (bereinigt)\",
+      \"verification_steps\": [\"Schritt 1\", \"Schritt 2\"],
+      \"files_to_create\": [],
+      \"files_to_modify\": [],
+      \"dependencies\": [],
+      \"passes\": false
+    }
+  ]
+}
+
+## Regeln:
+- Item-IDs als GH-<number> formatieren (z.B. GH-042 für Issue #42), mit führenden Nullen auf 3 Stellen
+- gh_issue_number enthält die originale GitHub Issue-Nummer als Integer
+- Label-Mapping für Prioritäten: 'bug'→high, 'critical'/'urgent'→critical, 'enhancement'/'feature'→medium, Rest→medium
+- Label-Mapping für Kategorien: 'bug'→bugfix, 'enhancement'/'feature'→feature, 'refactor'→refactor
+- Dependencies aus Issue-Referenzen erkennen (#N Verweise im Body)
+- Sinnvolle verification_steps aus dem Issue-Kontext ableiten
+- passes ist immer false (noch nicht implementiert)
+- Schreibe die Datei direkt nach .ralphy/prd.json"
+
+    echo "🚀 Starte Agent '$CREATE_PRD_AGENT' zur PRD-Erstellung..."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # Find opencode
+    local oc_cmd="opencode"
+    if [[ -f "$HOME/.local/bin/opencode" ]]; then
+        oc_cmd="$HOME/.local/bin/opencode"
+    elif [[ -f "$HOME/.cargo/bin/opencode" ]]; then
+        oc_cmd="$HOME/.cargo/bin/opencode"
+    fi
+
+    # Write prompt to temp file to avoid quoting issues
+    local prompt_file
+    prompt_file=$(mktemp)
+    echo "$prd_prompt" > "$prompt_file"
+
+    # Execute agent
+    if command -v expect >/dev/null 2>&1; then
+        expect << EXPECT_EOF 2>&1 || true
+set timeout 300
+set prompt_content [read [open "$prompt_file" r]]
+spawn $oc_cmd run --agent $CREATE_PRD_AGENT \$prompt_content
+expect {
+    -re "Permission required.*Allow once" {
+        send "\\r"
+        exp_continue
+    }
+    -re "❯|\\? " {
+        send "\\r"
+        exp_continue
+    }
+    eof {
+        catch wait result
+        exit [lindex \$result 3]
+    }
+}
+EXPECT_EOF
+    else
+        $oc_cmd run --agent "$CREATE_PRD_AGENT" "$(cat "$prompt_file")" 2>&1 || true
+    fi
+
+    rm -f "$prompt_file" 2>/dev/null || true
+
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # Verify result
+    if [[ -f "$PROJECT_DIR/.ralphy/prd.json" ]]; then
+        local item_count
+        item_count=$(python3 -c "
+import json, sys
+try:
+    with open('$PROJECT_DIR/.ralphy/prd.json') as f:
+        data = json.load(f)
+    print(len(data.get('items', [])))
+except:
+    print('0')
+" 2>/dev/null || echo "0")
+
+        echo ""
+        echo "╔════════════════════════════════════════════════════════════╗"
+        echo "║  ✅ prd.json erstellt mit $item_count Items aus GitHub Issues     ║"
+        echo "╚════════════════════════════════════════════════════════════╝"
+        echo ""
+        echo "Nächster Schritt: ralphy [ITERATIONS] um die Items abzuarbeiten"
+    else
+        echo ""
+        echo "❌ FEHLER: .ralphy/prd.json wurde nicht erstellt!"
+        echo "Der Agent konnte die Datei nicht schreiben."
+        exit 1
+    fi
+}
+
+# Execute create-prd subcommand if active
+if [[ "$SUBCOMMAND" == "create-prd" ]]; then
+    create_prd_from_issues
+    exit 0
+fi
+
+# ============================================================================
+# MAIN LOOP
+# ============================================================================
+
+# Determine which prompt file to use based on mode
+if [[ "$BUGFIX_MODE" == "true" ]]; then
+    PROMPT_FILE=".ralphy/BUGFIX_PROMPT.md"
+else
+    PROMPT_FILE=".ralphy/RALPHY_PROMPT.md"
+fi
+
+# Load prompt from file or use default if missing (but it should exist due to check above)
+if [[ -f "$PROMPT_FILE" ]]; then
+    RALPHY_PROMPT_BASE=$(cat "$PROMPT_FILE")
+else
+    echo "⚠️  $PROMPT_FILE nicht gefunden! Nutze Fallback."
     RALPHY_PROMPT_BASE='WICHTIG: Du musst in dieser Session CODE SCHREIBEN und COMMITTEN.'
 fi
 
@@ -415,9 +1023,17 @@ fi
 # ============================================================================
 
 PERCEPTIONS_FILE="$PROJECT_DIR/.ralphy/important-perceptions.md"
-PRD_FILE="$PROJECT_DIR/.ralphy/prd.json"
 PROGRESS_FILE="$PROJECT_DIR/.ralphy/progress.txt"
 CLAUDE_FILE="$PROJECT_DIR/CLAUDE.md"
+
+# Set task file based on mode
+if [[ "$BUGFIX_MODE" == "true" ]]; then
+    TASK_FILE="$PROJECT_DIR/.ralphy/bugs.json"
+    TASK_NAME="Bugs"
+else
+    TASK_FILE="$PROJECT_DIR/.ralphy/prd.json"
+    TASK_NAME="PRD"
+fi
 
 # ============================================================================
 # CONTINUE MODE LOGIC
@@ -489,7 +1105,7 @@ $GIT_DIFF
     echo ""
     echo "Starte in 3 Sekunden... (Ctrl+C zum Abbrechen)"
     sleep 3
-    clear
+    # clear
 fi
 
 for ((i=1; i<=MAX_ITERATIONS; i++)); do
@@ -521,12 +1137,233 @@ ${CONTINUE_CONTEXT}"
         opencode)
             # OpenCode: read file contents and embed in prompt (like claude)
             # OpenCode may not support -f flag as expected, so we read files directly
-            FULL_PROMPT="${RALPHY_PROMPT_BASE}
+
+            # Get next bug if in bugfix mode
+            BUG_INFO=""
+            if [[ "$BUGFIX_MODE" == "true" ]]; then
+                BUG_INFO=$(get_next_bug "$TASK_FILE")
+                if [[ "$BUG_INFO" == "NONE" ]]; then
+                    echo ""
+                    echo "╔════════════════════════════════════════════════╗"
+                    echo "║  ✅ ALLE BUGS BEHOBEN! Keine offenen Bugs.  ║"
+                    echo "╚════════════════════════════════════════════════╝"
+                    echo ""
+                    exit 0
+                elif [[ "$BUG_INFO" == ERROR* ]]; then
+                    echo "❌ FEHLER beim Lesen der Bugs: $BUG_INFO"
+                    exit 1
+                else
+                    # Parse bug info: id|title|priority|description
+                    BUG_ID=$(echo "$BUG_INFO" | cut -d'|' -f1)
+                    BUG_TITLE=$(echo "$BUG_INFO" | cut -d'|' -f2)
+                    BUG_PRIORITY=$(echo "$BUG_INFO" | cut -d'|' -f3)
+                    BUG_DESC=$(echo "$BUG_INFO" | cut -d'|' -f4-)
+                fi
+            fi
+
+            # GH-Issues Mode: Two-step agent approach
+            GH_ITEM_ID=""
+            GH_ITEM_ISSUE_NUM=""
+            GH_ITEM_DESC=""
+            GH_ITEM_DETAILS=""
+            USE_AGENT_MODE=""
+
+            if [[ "$HAS_GH_ISSUES" == "true" && -n "$SELECTED_AGENT" ]]; then
+                # Check if there are open items left (quick Python check)
+                OPEN_COUNT=$(python3 -c "
+import json, sys
+try:
+    with open('$TASK_FILE') as f:
+        data = json.load(f)
+    items = [i for i in data.get('items', []) if i.get('gh_issue_number') and not i.get('passes', False)]
+    print(len(items))
+except:
+    print('0')
+" 2>/dev/null || echo "0")
+
+                if [[ "$OPEN_COUNT" == "0" ]]; then
+                    echo ""
+                    echo "╔════════════════════════════════════════════════════════════╗"
+                    echo "║  ✅ ALLE GH-ISSUES ERLEDIGT! Keine offenen Items.        ║"
+                    echo "╚════════════════════════════════════════════════════════════╝"
+                    echo ""
+                    exit 0
+                fi
+
+                # ── STEP 1: Selector-Agent wählt das nächste Item ──
+                echo ""
+                echo "┌─────────────────────────────────────────────────────────┐"
+                echo "│  📋 Schritt 1: Selector-Agent wählt nächstes Issue...  │"
+                echo "└─────────────────────────────────────────────────────────┘"
+                echo ""
+
+                SELECTOR_AGENT="${SELECTOR_AGENT:-build}"
+                SELECTOR_PROMPT="Lies die Datei .ralphy/prd.json und .ralphy/progress.txt.
+
+Analysiere alle offenen Items (passes: false, mit gh_issue_number).
+
+Deine Aufgabe ist es, das *strategisch wichtigste* nächste Item auszuwählen.
+
+Priorisiere in dieser Reihenfolge:
+1. **Blocker-Status**: Wähle NUR Items, deren Dependencies (\`dependencies\`) bereits erledigt sind (\`passes: true\`).
+2. **Priorität**: Critical > High > Medium > Low.
+3. **Logische Architektur**: Backend vor Frontend, Core vor UI, Infrastruktur vor Features.
+4. **Machbarkeit**: Prüfe kurz im Code (via Tools), ob die Voraussetzungen geschaffen sind.
+
+Vermeide strikt:
+- Einfach das erste Item der Liste zu nehmen (prüfe die ganze Liste!).
+- Items zu wählen, die von noch offenen Items abhängen.
+- Items, die bereits in progress.txt als erledigt markiert sind (Check gegen prd.json).
+
+Antworte NUR in diesem exakten Format (eine Zeile, nichts anderes):
+SELECTED|<item-id>|<gh_issue_number>|<description>
+
+Beispiel:
+SELECTED|GH-042|42|Login-Button reagiert nicht auf Klick
+
+Wenn kein offenes Item gefunden wurde, antworte:
+SELECTED|NONE|0|Keine offenen Items"
+
+                # Run selector agent
+                OC_SELECTOR_CMD="${OPENCODE_FULL_PATH:-opencode}"
+                SELECTOR_PROMPT_FILE=$(mktemp)
+                echo "$SELECTOR_PROMPT" > "$SELECTOR_PROMPT_FILE"
+                SELECTOR_OUTPUT=""
+
+                if command -v expect >/dev/null 2>&1; then
+                    SELECTOR_OUTPUT=$(expect << SELECTOR_EOF 2>/dev/null
+set timeout 120
+set prompt_content [read [open "$SELECTOR_PROMPT_FILE" r]]
+spawn $OC_SELECTOR_CMD run --agent $SELECTOR_AGENT -m $MODEL \$prompt_content
+expect {
+    -re "Permission required.*Allow once" {
+        send "\\r"
+        exp_continue
+    }
+    -re "❯|\\? " {
+        send "\\r"
+        exp_continue
+    }
+    eof {
+        catch wait result
+    }
+}
+SELECTOR_EOF
+                    ) || true
+                else
+                    SELECTOR_OUTPUT=$($OC_SELECTOR_CMD run --agent "$SELECTOR_AGENT" -m "$MODEL" "$(cat "$SELECTOR_PROMPT_FILE")" 2>/dev/null || echo "")
+                fi
+                rm -f "$SELECTOR_PROMPT_FILE" 2>/dev/null || true
+
+                # Parse selector output - look for SELECTED|... line
+                SELECTED_LINE=$(echo "$SELECTOR_OUTPUT" | grep -oP 'SELECTED\|[^|]+\|[^|]+\|.+' | head -1 || echo "")
+
+                if [[ -n "$SELECTED_LINE" ]]; then
+                    GH_ITEM_ID=$(echo "$SELECTED_LINE" | cut -d'|' -f2)
+                    GH_ITEM_ISSUE_NUM=$(echo "$SELECTED_LINE" | cut -d'|' -f3)
+                    GH_ITEM_DESC=$(echo "$SELECTED_LINE" | cut -d'|' -f4-)
+
+                    if [[ "$GH_ITEM_ID" == "NONE" ]]; then
+                        echo "✅ Selector-Agent: Keine offenen Items mehr."
+                        exit 0
+                    fi
+
+                    # Fetch full details from prd.json for this item
+                    GH_ITEM_DETAILS=$(python3 -c "
+import json, sys
+try:
+    with open('$TASK_FILE') as f:
+        data = json.load(f)
+    for item in data.get('items', []):
+        if item.get('id') == '$GH_ITEM_ID':
+            print(item.get('details', ''))
+            sys.exit(0)
+    print('')
+except:
+    print('')
+" 2>/dev/null || echo "")
+
+                    USE_AGENT_MODE=true
+                    echo "✅ Selector-Agent hat gewählt: $GH_ITEM_ID (Issue #$GH_ITEM_ISSUE_NUM)"
+                    echo "   $GH_ITEM_DESC"
+                    echo ""
+                else
+                    echo "⚠️  Selector-Agent konnte kein Item auswählen."
+                    echo "   Ausgabe: $(echo "$SELECTOR_OUTPUT" | tail -3)"
+                    echo "   Fallback auf normalen Modus..."
+                fi
+            fi
+
+            if [[ "$USE_AGENT_MODE" == "true" ]]; then
+                # ── STEP 2: Primär-Agent bearbeitet das Issue ──
+                echo "┌─────────────────────────────────────────────────────────┐"
+                echo "│  🔧 Schritt 2: $SELECTED_AGENT bearbeitet Issue #$GH_ITEM_ISSUE_NUM  │"
+                echo "└─────────────────────────────────────────────────────────┘"
+                echo ""
+
+                # Build prompt for the primary agent (same style as RALPHY_PROMPT)
+                FULL_PROMPT="Du bist ein erfahrener Software-Entwickler der systematisch GitHub Issues bearbeitet.
+
+## Dein aktueller Task
+
+**GitHub Issue #${GH_ITEM_ISSUE_NUM}** (${GH_ITEM_ID}): ${GH_ITEM_DESC}
+
+${GH_ITEM_DETAILS}
+
+## Iterationsablauf
+
+1. **Sofort in progress.txt dokumentieren!**
+   - Schreibe SOFORT in .ralphy/progress.txt:
+   - Format: \`[YYYY-MM-DD HH:MM:SS] ${GH_ITEM_ID}: ${GH_ITEM_DESC} (START)\`
+   - Hole Timestamp vom Terminal: \`date '+%Y-%m-%d %H:%M:%S'\`
+
+2. **Codebase erkunden**: Verstehe die existierende Architektur bevor du Code schreibst.
+   - Schaue dir ähnliche bereits implementierte Features an
+   - Folge den bestehenden Patterns und Konventionen
+
+3. **Implementieren**: Schreibe sauberen, getesteten Code.
+   - Halte dich an Best Practices der Sprache/Framework
+
+4. **Feedback Loops ausführen**:
+   - Führe Tests und Linter aus
+   - Fahre NICHT fort wenn einer dieser Schritte fehlschlägt. Behebe zuerst den Fehler.
+
+5. **Fortschritt dokumentieren**:
+   - Aktualisiere .ralphy/progress.txt mit dem was du getan hast
+   - Setze \`passes: true\` für Item ${GH_ITEM_ID} in .ralphy/prd.json
+
+6. **Git Commit erstellen**:
+   - \`git add -A && git commit -m \"fix(${GH_ITEM_ID}): Kurze Beschreibung\"\`
+
+## Wichtige Regeln
+
+- ARBEITE NUR AN DIESEM EINEN ISSUE pro Durchlauf
+- Commit nur wenn ALLE Feedback Loops bestehen
+- Wenn du blockiert bist, dokumentiere das Problem in progress.txt
+- Qualität vor Geschwindigkeit
+- Folge den bestehenden Code-Patterns
+
+## Kontext-Dateien
+
+### prd.json:
+$(cat "$TASK_FILE" 2>/dev/null || echo "Nicht gefunden")
+
+### progress.txt:
+$(cat "$PROGRESS_FILE" 2>/dev/null || echo "Noch leer")
+
+### CLAUDE.md:
+$(cat "$CLAUDE_FILE" 2>/dev/null || echo "Nicht gefunden")
+
+## Stop Condition
+
+Wenn du mit Issue #${GH_ITEM_ISSUE_NUM} fertig bist, gib aus: <promise>COMPLETE</promise>"
+            else
+                FULL_PROMPT="${RALPHY_PROMPT_BASE}
 
 ## Dateien:
 
-### prd.json:
-$(cat "$PRD_FILE" 2>/dev/null || echo "⚠️  Datei nicht gefunden: $PRD_FILE")
+### ${TASK_NAME}.json:
+$(cat "$TASK_FILE" 2>/dev/null || echo "⚠️  Datei nicht gefunden: $TASK_FILE")
 
 ### progress.txt:
 $(cat "$PROGRESS_FILE" 2>/dev/null || echo "⚠️  Datei nicht gefunden: $PROGRESS_FILE")
@@ -537,7 +1374,8 @@ $(cat "$CLAUDE_FILE" 2>/dev/null || echo "⚠️  Datei nicht gefunden: $CLAUDE_
 ---
 ${PERCEPTIONS}
 ${CONTINUE_CONTEXT}"
-            # Execute: opencode run -m MODEL "prompt with embedded files"
+            fi
+            # Execute: opencode run (with agent or model) "prompt"
             # Start progress indicator in background with fixed header at top
             # Uses scroll region to keep header separate from log output
             TOOL_STATUS_FILE=$(mktemp)
@@ -615,57 +1453,63 @@ ${CONTINUE_CONTEXT}"
             }
 
             # Setup: Set scroll region for top of terminal, reserve bottom for status
-            STATUSBAR_LINES=3
-            printf "\033[1;$((TERM_LINES - STATUSBAR_LINES))r" >&2   # Set scroll region (top to bottom-3)
+            # STATUSBAR_LINES=3
+            # printf "\033[1;$((TERM_LINES - STATUSBAR_LINES))r" >&2   # Set scroll region (top to bottom-3)
             # Don't reset cursor to top - let it continue from current position
 
             # Draw initial status bar
-            draw_statusbar 0 "Startet..." "init" 0 0 0 0
+            # draw_statusbar 0 "Startet..." "init" 0 0 0 0
 
             echo "━━━ Iteration $i gestartet ━━━"
 
-            (
-                sleep 1  # Wait 1s before first update
-                counter=1
-                current_status="Startet..."
-                current_phase="init"
-                while true; do
-                    # Read current status
-                    if [[ -f "$TOOL_STATUS_FILE" ]]; then
-                        read -r new_status new_phase < "$TOOL_STATUS_FILE" 2>/dev/null || true
-                        [[ -n "$new_status" ]] && current_status="$new_status"
-                        [[ -n "$new_phase" ]] && current_phase="$new_phase"
-                    fi
-
-                    # Read tool counts
-                    reads=0 edits=0 bashes=0 others=0
-                    if [[ -f "$TOOL_COUNT_FILE" ]]; then
-                        read -r reads edits bashes others < "$TOOL_COUNT_FILE" 2>/dev/null || true
-                    fi
-
-                    # Update status bar
-                    draw_statusbar $((counter * 2)) "$current_status" "$current_phase" "${reads:-0}" "${edits:-0}" "${bashes:-0}" "${others:-0}"
-
-                    sleep 2
-                    counter=$((counter + 1))
-                done
-            ) &
-            PROGRESS_PID=$!
-            export PROGRESS_PID  # Make it available to trap handler
+            # (
+            #     sleep 1  # Wait 1s before first update
+            #     counter=1
+            #     current_status="Startet..."
+            #     current_phase="init"
+            #     while true; do
+            #         # Read current status
+            #         if [[ -f "$TOOL_STATUS_FILE" ]]; then
+            #             read -r new_status new_phase < "$TOOL_STATUS_FILE" 2>/dev/null || true
+            #             [[ -n "$new_status" ]] && current_status="$new_status"
+            #             [[ -n "$new_phase" ]] && current_phase="$new_phase"
+            #         fi
+            #
+            #         # Read tool counts
+            #         reads=0 edits=0 bashes=0 others=0
+            #         if [[ -f "$TOOL_COUNT_FILE" ]]; then
+            #             read -r reads edits bashes others < "$TOOL_COUNT_FILE" 2>/dev/null || true
+            #         fi
+            #
+            #         # Update status bar
+            #         # draw_statusbar $((counter * 2)) "$current_status" "$current_phase" "${reads:-0}" "${edits:-0}" "${bashes:-0}" "${others:-0}"
+            #
+            #         sleep 2
+            #         counter=$((counter + 1))
+            #     done
+            # ) &
+            # PROGRESS_PID=$!
+            # export PROGRESS_PID  # Make it available to trap handler
 
             # Execute and capture output, displaying it in real-time
             # Use a temp file and tee to both display and capture
-            # Use CMD_ARGS for consistency (includes -m MODEL)
             TEMP_OUTPUT=$(mktemp)
+
+            # Build the actual command to execute
+            if [[ "$USE_AGENT_MODE" == "true" ]]; then
+                OC_RUN_CMD="$CMD run --agent $SELECTED_AGENT -m $MODEL"
+            else
+                OC_RUN_CMD="$CMD $CMD_ARGS"
+            fi
 
             # Execute command with auto-confirmation of "Allow once" permissions
             # Simple approach: Use expect if available, otherwise just execute normally
             # User can still manually confirm if needed
             if command -v expect >/dev/null 2>&1; then
-                # Use expect script to auto-confirm permissions
+                # Use expect script to auto-confirm permissions and agent questions
                 expect << EOF | while IFS= read -r line; do
 set timeout -1
-spawn bash -c "$CMD $CMD_ARGS \"$FULL_PROMPT\""
+spawn bash -c "$OC_RUN_CMD \"$FULL_PROMPT\""
 expect {
     -re "Permission required.*Allow once" {
         # Check if it's a Remove request outside project directory
@@ -676,6 +1520,11 @@ expect {
             exp_continue
         }
         # Auto-confirm with Enter (Allow once is default)
+        send "\\r"
+        exp_continue
+    }
+    -re "❯|\\? " {
+        # Auto-confirm agent questions (qfixer tool-call "question")
         send "\\r"
         exp_continue
     }
@@ -738,12 +1587,16 @@ EOF
                         # Update counts
                         echo "$t_reads $t_edits $t_bashes $t_others" > "$TOOL_COUNT_FILE" 2>/dev/null || true
                     fi
-                    # Always output the original line
-                    echo "$line"
+                    # Truncate output line to 250 chars
+                    if [[ ${#line} -gt 250 ]]; then
+                        echo "${line:0:250}..."
+                    else
+                        echo "$line"
+                    fi
                 done | tee "$TEMP_OUTPUT" || true
             else
                 # Fallback: Execute normally (user will need to manually confirm)
-                $CMD $CMD_ARGS "$FULL_PROMPT" 2>&1 | while IFS= read -r line; do
+                $OC_RUN_CMD "$FULL_PROMPT" 2>&1 | while IFS= read -r line; do
                     # Process line - update counts and status
                     # Strip ANSI color codes for matching
                     clean_line=$(echo "$line" | sed 's/\x1b\[[0-9;]*m//g')
@@ -797,8 +1650,12 @@ EOF
                         # Update counts
                         echo "$t_reads $t_edits $t_bashes $t_others" > "$TOOL_COUNT_FILE" 2>/dev/null || true
                     fi
-                    # Always output the original line
-                    echo "$line"
+                    # Truncate output line to 250 chars
+                    if [[ ${#line} -gt 250 ]]; then
+                        echo "${line:0:250}..."
+                    else
+                        echo "$line"
+                    fi
                 done | tee "$TEMP_OUTPUT" || true
             fi
             EXIT_CODE=${PIPESTATUS[0]}
@@ -823,9 +1680,9 @@ EOF
             rm -f "$TOOL_STATUS_FILE" "$TOOL_COUNT_FILE" 2>/dev/null || true
 
             # Clear status bar but keep scroll region active
-            for ((line=TERM_LINES-STATUSBAR_LINES+1; line<=TERM_LINES; line++)); do
-                printf "\033[s\033[%d;1H\033[K\033[u" "$line" >&2
-            done
+            # for ((line=TERM_LINES-STATUSBAR_LINES+1; line<=TERM_LINES; line++)); do
+            #     printf "\033[s\033[%d;1H\033[K\033[u" "$line" >&2
+            # done
 
             echo ""
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -888,11 +1745,88 @@ ${CONTINUE_CONTEXT}"
 
     # Check for completion (only if result contains the promise tag and no errors)
     if [[ "$result" == *"<promise>COMPLETE</promise>"* ]] && [[ "$result" != *"Error:"* ]] && [[ "$result" != *"FEHLER"* ]]; then
+        # If in bugfix mode, update bug status
+        if [[ "$BUGFIX_MODE" == "true" ]] && [[ -n "$BUG_ID" ]]; then
+            echo ""
+            echo "🔄 Aktualisiere Bug-Status..."
+            RESOLVE_RESULT=$(resolve_bug "$TASK_FILE" "$BUG_ID")
+            if [[ "$RESOLVE_RESULT" == "OK" ]]; then
+                echo "✅ Bug $BUG_ID als resolved markiert!"
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] $BUG_ID: $BUG_TITLE - [RESOLVED]" >> "$PROGRESS_FILE"
+            else
+                echo "⚠️  Fehler beim Aktualisieren des Bug-Status: $RESOLVE_RESULT"
+            fi
+        fi
+
+        # If GH-Issue mode, mark item as passes: true and continue loop
+        if [[ "$USE_AGENT_MODE" == "true" && -n "$GH_ITEM_ID" ]]; then
+            echo ""
+            echo "🔄 Markiere $GH_ITEM_ID als erledigt..."
+            python3 -c "
+import json
+
+try:
+    with open('$TASK_FILE', 'r') as f:
+        data = json.load(f)
+
+    for item in data.get('items', []):
+        if item.get('id') == '$GH_ITEM_ID':
+            item['passes'] = True
+            break
+
+    with open('$TASK_FILE', 'w') as f:
+        json.dump(data, f, indent=2)
+
+    print('OK')
+except Exception as e:
+    print(f'ERROR: {e}')
+" 2>/dev/null
+            echo "✅ $GH_ITEM_ID (Issue #$GH_ITEM_ISSUE_NUM) als erledigt markiert!"
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] $GH_ITEM_ID: $GH_ITEM_DESC - [DONE via $SELECTED_AGENT]" >> "$PROGRESS_FILE"
+
+            # Check if all GH-issue items are done
+            ALL_GH_DONE=$(python3 -c "
+import json
+try:
+    with open('$TASK_FILE') as f:
+        data = json.load(f)
+    gh_items = [i for i in data.get('items', []) if i.get('gh_issue_number')]
+    all_done = all(i.get('passes', False) for i in gh_items)
+    print('true' if all_done else 'false')
+except:
+    print('false')
+" 2>/dev/null || echo "false")
+
+            if [[ "$ALL_GH_DONE" == "true" ]]; then
+                # printf "\033[r" >&2
+                echo ""
+                echo "╔════════════════════════════════════════════════════════════╗"
+                echo "║  ✅ ALLE GH-ISSUES ERLEDIGT!                              ║"
+                echo "╚════════════════════════════════════════════════════════════╝"
+                echo ""
+                echo "Provider: $PROVIDER_DISPLAY (Agent: $SELECTED_AGENT)"
+                echo "Iterationen: $i von $MAX_ITERATIONS"
+                echo ""
+                echo "Prüfe .ralphy/progress.txt für Details."
+                exit 0
+            fi
+
+            # Continue to next iteration (next GH-issue item)
+            echo ""
+            echo "⏳ Pause vor nächstem Issue ($PAUSE_SECONDS Sekunden)..."
+            sleep $PAUSE_SECONDS
+            continue
+        fi
+
         # Reset scroll region before final output
-        printf "\033[r" >&2
+        # printf "\033[r" >&2
         echo ""
         echo "╔════════════════════════════════════════════════════════════╗"
-        echo "║  ✅ PRD COMPLETE! Alle kritischen Features implementiert.  ║"
+        if [[ "$BUGFIX_MODE" == "true" ]]; then
+            echo "║  ✅ BUG FIXING COMPLETE! Bug behoben.                        ║"
+        else
+            echo "║  ✅ PRD COMPLETE! Alle kritischen Features implementiert.  ║"
+        fi
         echo "╚════════════════════════════════════════════════════════════╝"
         echo ""
         echo "Provider: $PROVIDER_DISPLAY"
@@ -908,7 +1842,7 @@ ${CONTINUE_CONTEXT}"
 done
 
 # Reset scroll region after loop ends
-printf "\033[r" >&2
+# printf "\033[r" >&2
 
 echo ""
 echo "╔════════════════════════════════════════════════════════════╗"

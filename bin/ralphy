@@ -1,7 +1,7 @@
 #!/bin/bash
 # ralphy - Ralphy Wiggum Loop für autonome AI-Entwicklung
 #
-# Unterstützt drei CLI-Tools: claude, ccs, opencode
+# Unterstützt OpenCode als CLI-Tool
 #
 # Usage: ralphy [OPTIONS] [max_iterations]
 
@@ -174,13 +174,14 @@ fi
 # ARGUMENT PARSING
 # ============================================================================
 
-TOOL=""           # claude, ccs, opencode
-PROVIDER=""       # Provider name
 MODEL=""          # Model for opencode
 VARIANT=""        # Variant for opencode (e.g., low, high)
 MAX_ITERATIONS=""
 CONTINUE_MODE=""  # Continue from last session
 BUGFIX_MODE=""    # Bugfixing mode (uses bugs.json instead of prd.json)
+FORCE_TASK=""     # Force start with specific task ID (e.g. gh-10)
+USER_MESSAGE=""   # Custom message for selector and implementer
+CURRENT_BRANCH="" # Current git branch (detected at startup)
 
 show_help() {
     echo "Ralphy Wiggum Loop - Autonome AI-Entwicklung"
@@ -203,41 +204,19 @@ show_help() {
     echo "╚══════════════════════════════════════════════════════════════════╝"
     echo ""
     echo "╔══════════════════════════════════════════════════════════════════╗"
-    echo "║ Claude (Default) - Anthropic Subscription                        ║"
+    echo "║ OpenCode — Default Model: github-copilot/gpt-5.2                ║"
     echo "╠══════════════════════════════════════════════════════════════════╣"
-    echo "║ ralphy 10                        # Claude direkt, 10 Iterationen  ║"
-    echo "╚══════════════════════════════════════════════════════════════════╝"
-    echo ""
-    echo "╔══════════════════════════════════════════════════════════════════╗"
-    echo "║ OpenCode Provider (--oc-*)                                       ║"
-    echo "╠══════════════════════════════════════════════════════════════════╣"
-    echo "║ --oc-gemini     Antigravity Gemini 3 Pro                        ║"
-    echo "║ --oc-gemini-low Antigravity Gemini 3 Pro (low thinking)        ║"
-    echo "║ --oc-flash      Antigravity Gemini 3 Flash (schneller)          ║"
-    echo "║ --oc-agy        Antigravity Claude Sonnet 4.5                    ║"
-    echo "║ --oc-agy-opus   Antigravity Claude Opus 4.5 + Thinking           ║"
-    echo "║ --oc-glm        Z.AI GLM 4.6                                     ║"
-    echo "║ --oc-glm7       Z.AI GLM 4.7 (newest)                            ║"
-    echo "║ --oc-cerebras   Cerebras GLM 4.7 (fast inference)                ║"
-    echo "╚══════════════════════════════════════════════════════════════════╝"
-    echo ""
-    echo "╔══════════════════════════════════════════════════════════════════╗"
-    echo "║ CCS Provider (--ccs-*)                                           ║"
-    echo "╠══════════════════════════════════════════════════════════════════╣"
-    echo "║ --ccs-glm       Z.AI GLM                                         ║"
-    echo "║ --ccs-glmt      Z.AI GLM + Thinking                              ║"
-    echo "║ --ccs-agy       Antigravity                                      ║"
-    echo "║ --ccs-gemini    Google Gemini                                    ║"
-    echo "║ --ccs-codex     OpenAI Codex                                     ║"
-    echo "║ --ccs-kimi      Kimi                                             ║"
-    echo "║ --ccs-qwen      Qwen                                             ║"
+    echo "║ -m, --model MODEL    Model auswählen (opencode models zeigt alle) ║"
+    echo "║ --variant VARIANT    Variant setzen (z.B. low, high)             ║"
     echo "╚══════════════════════════════════════════════════════════════════╝"
     echo ""
     echo "Weitere Optionen:"
-    echo "  -c, --continue  Letzte Session wiederherstellen (aus progress.txt + git diff)"
-    echo "  -h, --help      Diese Hilfe anzeigen"
-    echo "  --list          Verfügbare Provider anzeigen"
-    echo "  -v, --version   Version anzeigen"
+    echo "  -c, --continue      Letzte Session wiederherstellen (aus progress.txt + git diff)"
+    echo "  --task ID           Mit bestimmtem Task starten (z.B. gh-10)"
+    echo "  --message TEXT      Custom-Nachricht an Selector & Implementer"
+    echo "  -h, --help          Diese Hilfe anzeigen"
+    echo "  --list              Verfügbare Models anzeigen (opencode models)"
+    echo "  -v, --version       Version anzeigen"
     echo ""
     echo "GH-Issues Workflow:"
     echo "  1. ralphy create-prd --gh-issues        # PRD aus GitHub Issues erstellen"
@@ -248,21 +227,9 @@ show_help() {
 }
 
 show_providers() {
-    echo "╔════════════════════════════════════════════════════════════════════╗"
-    echo "║             Verfügbare Provider (verbundene Accounts)             ║"
-    echo "╠════════════════════════════════════════════════════════════════════╣"
-    echo "║                                                                    ║"
-    echo "║ OPENCODE (opencode auth list):                                     ║"
-    echo "║   Google (OAuth):      antigravity-gemini-3-pro, antigravity-gemini-3-flash ║"
-    echo "║                        antigravity-claude-opus/sonnet-4.5         ║"
-    echo "║   Z.AI Coding (API):   glm-4.6, glm-4.7                           ║"
-    echo "║   Cerebras (API):      zai-glm-4.7, qwen-3-235b                   ║"
-    echo "║                                                                    ║"
-    echo "║ CCS (ccs):                                                         ║"
-    echo "║   OAuth:               gemini, codex, agy                          ║"
-    echo "║   API-Key:             glm, glmt, kimi, qwen                       ║"
-    echo "║                                                                    ║"
-    echo "╚════════════════════════════════════════════════════════════════════╝"
+    echo "Verfügbare OpenCode Models:"
+    echo ""
+    opencode models 2>/dev/null || echo "❌ opencode nicht gefunden. Installiere: curl -fsSL https://opencode.ai/install | bash"
 }
 
 # Parse arguments
@@ -280,102 +247,26 @@ while [[ $# -gt 0 ]]; do
             echo "ralphy version $VERSION"
             exit 0
             ;;
-        # Claude default
-        --default)
-            TOOL="claude"
+        -m|--model)
             shift
+            if [[ $# -gt 0 ]]; then
+                MODEL="$1"
+                shift
+            else
+                echo "❌ FEHLER: --model benötigt einen Model-Namen"
+                echo "Verfügbare Models: opencode models"
+                exit 1
+            fi
             ;;
-        # OpenCode providers
-        --oc)
-            TOOL="opencode"
-            PROVIDER="github-copilot"
-            MODEL="github-copilot/gemini-3-flash-preview"
+        --variant)
             shift
-            ;;
-        --oc-gemini)
-            TOOL="opencode"
-            PROVIDER="gemini"
-            MODEL="google/antigravity-gemini-3-pro"
-            shift
-            ;;
-        --oc-gemini-low)
-            TOOL="opencode"
-            PROVIDER="gemini-low"
-            MODEL="google/antigravity-gemini-3-pro"
-            VARIANT="low"
-            shift
-            ;;
-        --oc-flash)
-            TOOL="opencode"
-            PROVIDER="github-copilot"
-            MODEL="github-copilot/gemini-3-flash-preview"
-            shift
-            ;;
-        --oc-agy)
-            TOOL="opencode"
-            PROVIDER="agy"
-            MODEL="google/antigravity-claude-sonnet-4-5"
-            shift
-            ;;
-        --oc-agy-opus)
-            TOOL="opencode"
-            PROVIDER="agy-opus"
-            MODEL="google/antigravity-claude-opus-4-5-thinking"
-            shift
-            ;;
-        --oc-glm)
-            TOOL="opencode"
-            PROVIDER="glm"
-            MODEL="zai-coding-plan/glm-4.6"
-            shift
-            ;;
-        --oc-glm7)
-            TOOL="opencode"
-            PROVIDER="glm7"
-            MODEL="zai-coding-plan/glm-4.7"
-            shift
-            ;;
-        --oc-cerebras)
-            TOOL="opencode"
-            PROVIDER="cerebras"
-            MODEL="cerebras/zai-glm-4.7"
-            shift
-            ;;
-        # CCS providers
-        --ccs-glm)
-            TOOL="ccs"
-            PROVIDER="glm"
-            shift
-            ;;
-        --ccs-glmt)
-            TOOL="ccs"
-            PROVIDER="glmt"
-            shift
-            ;;
-        --ccs-agy)
-            TOOL="ccs"
-            PROVIDER="agy"
-            shift
-            ;;
-        --ccs-gemini)
-            TOOL="ccs"
-            PROVIDER="gemini"
-            shift
-            ;;
-        --ccs-codex)
-            TOOL="ccs"
-            PROVIDER="codex"
-            shift
-            ;;
-        --ccs-kimi)
-            TOOL="ccs"
-            PROVIDER="kimi"
-            shift
-            ;;
-        --ccs-qwen)
-            TOOL="ccs"
-            PROVIDER="qwen"
-            shift
+            if [[ $# -gt 0 ]]; then
+                VARIANT="$1"
+                shift
+            else
+                echo "❌ FEHLER: --variant benötigt einen Wert (z.B. low, high)"
+                exit 1
+            fi
             ;;
         -c|--continue)
             CONTINUE_MODE=true
@@ -384,6 +275,26 @@ while [[ $# -gt 0 ]]; do
         --bugfix)
             BUGFIX_MODE=true
             shift
+            ;;
+        --task)
+            shift
+            if [[ $# -gt 0 ]]; then
+                FORCE_TASK="$1"
+                shift
+            else
+                echo "❌ FEHLER: --task benötigt eine Task-ID (z.B. gh-10)"
+                exit 1
+            fi
+            ;;
+        --message|--msg)
+            shift
+            if [[ $# -gt 0 ]]; then
+                USER_MESSAGE="$1"
+                shift
+            else
+                echo "❌ FEHLER: --message benötigt einen Text"
+                exit 1
+            fi
             ;;
         # Numeric = iterations
         [0-9]*)
@@ -399,8 +310,29 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Set defaults
-TOOL=${TOOL:-claude}
+MODEL=${MODEL:-"github-copilot/gpt-5.2"}
+
+# Derive provider from model
+derive_provider() {
+    case "$1" in
+        github-copilot/*)   echo "github-copilot" ;;
+        google/antigravity-claude-opus*)  echo "agy-opus" ;;
+        google/antigravity-claude*)       echo "agy" ;;
+        google/antigravity-gemini*)       echo "gemini" ;;
+        google/*)           echo "google" ;;
+        zai-coding-plan/*)  echo "zai" ;;
+        cerebras/*)         echo "cerebras" ;;
+        opencode/*)         echo "opencode" ;;
+        *)                  echo "custom" ;;
+    esac
+}
+PROVIDER=$(derive_provider "$MODEL")
 MAX_ITERATIONS=${MAX_ITERATIONS:-$DEFAULT_ITERATIONS}
+
+# Detect current branch
+if git rev-parse --git-dir > /dev/null 2>&1; then
+    CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
+fi
 
 # ============================================================================
 # BUGFIX MODE CHECK
@@ -434,29 +366,14 @@ if [[ "$BUGFIX_MODE" == "true" ]]; then
 fi
 
 # Build command based on tool
-case $TOOL in
-    claude)
-        CMD="claude"
-        CMD_ARGS="--print"
-        PROVIDER_DISPLAY="Claude (direkt)"
-        ;;
-    opencode)
-        # Use the found opencode path (if set during check), otherwise default to "opencode"
-        CMD="${OPENCODE_FULL_PATH:-opencode}"
-        if [[ -n "$VARIANT" ]]; then
-            CMD_ARGS="run -m $MODEL --variant=$VARIANT"
-            PROVIDER_DISPLAY="OpenCode: $PROVIDER ($MODEL, variant: $VARIANT)"
-        else
-            CMD_ARGS="run -m $MODEL"
-            PROVIDER_DISPLAY="OpenCode: $PROVIDER ($MODEL)"
-        fi
-        ;;
-    ccs)
-        CMD="ccs"
-        CMD_ARGS="$PROVIDER -p"
-        PROVIDER_DISPLAY="CCS: $PROVIDER"
-        ;;
-esac
+CMD="${OPENCODE_FULL_PATH:-opencode}"
+if [[ -n "$VARIANT" ]]; then
+    CMD_ARGS="run -m $MODEL --variant=$VARIANT"
+    PROVIDER_DISPLAY="OpenCode: $PROVIDER ($MODEL, variant: $VARIANT)"
+else
+    CMD_ARGS="run -m $MODEL"
+    PROVIDER_DISPLAY="OpenCode: $PROVIDER ($MODEL)"
+fi
 
 # ============================================================================
 # HEADER
@@ -498,43 +415,25 @@ else
     echo ""
 fi
 
-# Check if required command is installed
-case $TOOL in
-    claude)
-        if ! command -v claude &> /dev/null; then
-            echo "❌ FEHLER: claude ist nicht installiert!"
-            exit 1
-        fi
-        ;;
-    opencode)
-        # Try to find opencode - check common locations if not in PATH
-        OPENCODE_CMD=""
-        if command -v opencode &> /dev/null; then
-            OPENCODE_CMD="opencode"
-        elif [[ -f "$HOME/.local/bin/opencode" ]]; then
-            OPENCODE_CMD="$HOME/.local/bin/opencode"
-        elif [[ -f "$HOME/.cargo/bin/opencode" ]]; then
-            OPENCODE_CMD="$HOME/.cargo/bin/opencode"
-        elif [[ -f "$HOME/bin/opencode" ]]; then
-            OPENCODE_CMD="$HOME/bin/opencode"
-        else
-            echo "❌ FEHLER: opencode ist nicht installiert oder nicht im PATH!"
-            echo "Gefundener PATH: $PATH"
-            echo "Installiere mit: curl -fsSL https://opencode.ai/install | bash"
-            echo "Oder füge das Installationsverzeichnis zum PATH hinzu."
-            exit 1
-        fi
-        # Update CMD to use found path (will be used later)
-        OPENCODE_FULL_PATH="$OPENCODE_CMD"
-        ;;
-    ccs)
-        if ! command -v ccs &> /dev/null; then
-            echo "❌ FEHLER: ccs ist nicht installiert!"
-            echo "Installiere mit: npm install -g @kaitranntt/ccs"
-            exit 1
-        fi
-        ;;
-esac
+# Check if opencode is installed
+OPENCODE_CMD=""
+if command -v opencode &> /dev/null; then
+    OPENCODE_CMD="opencode"
+elif [[ -f "$HOME/.local/bin/opencode" ]]; then
+    OPENCODE_CMD="$HOME/.local/bin/opencode"
+elif [[ -f "$HOME/.cargo/bin/opencode" ]]; then
+    OPENCODE_CMD="$HOME/.cargo/bin/opencode"
+elif [[ -f "$HOME/bin/opencode" ]]; then
+    OPENCODE_CMD="$HOME/bin/opencode"
+else
+    echo "❌ FEHLER: opencode ist nicht installiert oder nicht im PATH!"
+    echo "Gefundener PATH: $PATH"
+    echo "Installiere mit: curl -fsSL https://opencode.ai/install | bash"
+    echo "Oder füge das Installationsverzeichnis zum PATH hinzu."
+    exit 1
+fi
+# Update CMD to use found path (will be used later)
+OPENCODE_FULL_PATH="$OPENCODE_CMD"
 
 # ============================================================================
 # GH-ISSUES DETECTION & AGENT SELECTION
@@ -562,21 +461,16 @@ if [[ "$HAS_GH_ISSUES" == "true" ]]; then
     echo "╚════════════════════════════════════════════════════════════╝"
     echo ""
 
-    # Load agents dynamically from opencode
+    # Load agents dynamically from opencode (single pipeline, no per-line subprocesses)
     OC_CMD="${OPENCODE_FULL_PATH:-opencode}"
     AGENTS=()
 
-    if agent_list_output=$($OC_CMD agent list 2>/dev/null); then
-        while IFS= read -r line; do
-            # Strip ANSI codes
-            clean=$(echo "$line" | sed 's/\x1b\[[0-9;]*m//g')
-            # Agent lines match: "name (type)" at start of line (not indented)
-            agent_name=$(echo "$clean" | grep -oP '^[a-zA-Z][a-zA-Z0-9_-]+(?=\s+\()' 2>/dev/null || true)
-            if [[ -n "$agent_name" && "$agent_name" != "selector" ]]; then
-                AGENTS+=("$agent_name")
-            fi
-        done <<< "$agent_list_output"
-    fi
+    mapfile -t AGENTS < <(
+        $OC_CMD agent list 2>/dev/null \
+        | sed 's/\x1b\[[0-9;]*m//g' \
+        | grep -oP '^[a-zA-Z][a-zA-Z0-9_-]+(?=\s+\()' \
+        | grep -v '^selector$'
+    )
 
     # Fallback if no agents found
     if [[ ${#AGENTS[@]} -eq 0 ]]; then
@@ -652,32 +546,81 @@ if [[ "$HAS_GH_ISSUES" == "true" ]]; then
     echo "  ✅ Primär:   $SELECTED_AGENT"
     echo ""
 
-    # Force OpenCode usage if agents are selected but tool is still claude (default)
-    if [[ "$TOOL" == "claude" ]]; then
-        echo "⚠️  GitHub Issues Modus erfordert OpenCode. Wechsle zu 'opencode' (GitHub Copilot)..."
-        TOOL="opencode"
-        PROVIDER="github-copilot"
-        MODEL="github-copilot/gemini-3-flash-preview"
+    # ── Model auswählen ──
+    # Load models dynamically from opencode
+    AVAILABLE_MODELS=()
+    mapfile -t AVAILABLE_MODELS < <(
+        $OC_CMD models 2>/dev/null \
+        | sed 's/\x1b\[[0-9;]*m//g' \
+        | grep -oP '^[a-zA-Z][a-zA-Z0-9/_.-]+' \
+        | sort
+    )
 
-        # Ensure opencode is found
-        OPENCODE_FULL_PATH="${OPENCODE_FULL_PATH:-}"
-        if [[ -z "$OPENCODE_FULL_PATH" ]]; then
-            if command -v opencode &> /dev/null; then
-                OPENCODE_FULL_PATH="opencode"
-            elif [[ -f "$HOME/.local/bin/opencode" ]]; then
-                OPENCODE_FULL_PATH="$HOME/.local/bin/opencode"
-            elif [[ -f "$HOME/.cargo/bin/opencode" ]]; then
-                OPENCODE_FULL_PATH="$HOME/.cargo/bin/opencode"
-            else
-                echo "❌ FEHLER: opencode nicht gefunden! Bitte installiere es oder nutze --oc-gemini."
-                exit 1
-            fi
-        fi
-
-        CMD="$OPENCODE_FULL_PATH"
-        CMD_ARGS="run -m $MODEL"
-        PROVIDER_DISPLAY="OpenCode: $PROVIDER ($MODEL) [Auto-Switched]"
+    # Fallback if no models found
+    if [[ ${#AVAILABLE_MODELS[@]} -eq 0 ]]; then
+        AVAILABLE_MODELS=(
+            "github-copilot/gpt-5.2"
+            "github-copilot/gemini-3-flash-preview"
+            "google/antigravity-gemini-3-pro"
+            "google/antigravity-claude-sonnet-4-5"
+            "google/antigravity-claude-opus-4-5-thinking"
+            "zai-coding-plan/glm-4.7"
+            "cerebras/zai-glm-4.7"
+        )
     fi
+
+    echo "🧠 Model für $SELECTED_AGENT auswählen:"
+    echo ""
+
+    # Pre-select the model matching current MODEL (or default to index 0)
+    model_selected=0
+    if [[ -n "$MODEL" ]]; then
+        for idx in "${!AVAILABLE_MODELS[@]}"; do
+            if [[ "${AVAILABLE_MODELS[$idx]}" == "$MODEL" ]]; then
+                model_selected=$idx
+                break
+            fi
+        done
+    fi
+
+    while true; do
+        for idx in "${!AVAILABLE_MODELS[@]}"; do
+            if [[ $idx -eq $model_selected ]]; then
+                label="  ❯ ${AVAILABLE_MODELS[$idx]}"
+                if [[ "${AVAILABLE_MODELS[$idx]}" == "${MODEL:-github-copilot/gpt-5.2}" ]]; then
+                    label+="  (current)"
+                fi
+                echo "$label"
+            else
+                echo "    ${AVAILABLE_MODELS[$idx]}"
+            fi
+        done
+
+        read -s -n1 key
+        case "$key" in
+            $'\x1b')
+                read -s -n2 -t 0.1 seq || true
+                case "$seq" in
+                    '[A') ((model_selected > 0)) && ((model_selected--)) || true ;;
+                    '[B') ((model_selected < ${#AVAILABLE_MODELS[@]}-1)) && ((model_selected++)) || true ;;
+                esac
+                ;;
+            "") break ;;
+        esac
+
+        printf "\033[${#AVAILABLE_MODELS[@]}A"
+    done
+
+    MODEL="${AVAILABLE_MODELS[$model_selected]}"
+    echo ""
+    echo "  ✅ Model:    $MODEL"
+    echo ""
+
+    # Update provider and display after model selection
+    PROVIDER=$(derive_provider "$MODEL")
+    CMD="${OPENCODE_FULL_PATH:-opencode}"
+    CMD_ARGS="run -m $MODEL"
+    PROVIDER_DISPLAY="OpenCode: $PROVIDER ($MODEL)"
 fi
 
 echo "Starte in 3 Sekunden... (Ctrl+C zum Abbrechen)"
@@ -1108,14 +1051,47 @@ $GIT_DIFF
     # clear
 fi
 
+# Feature-branch detection: Check if we're on a feature branch with in-progress work
+BRANCH_RESUME_TASK=""
+if [[ -n "$CURRENT_BRANCH" && "$CURRENT_BRANCH" != "main" && "$CURRENT_BRANCH" != "master" ]]; then
+    echo ""
+    echo "🌿 Feature-Branch erkannt: $CURRENT_BRANCH"
+
+    # Check progress.txt for in-progress work (entries with START but no DONE)
+    if [[ -f "$PROGRESS_FILE" ]]; then
+        # Find items that have START but no corresponding DONE
+        BRANCH_RESUME_TASK=$(python3 -c "
+import re, sys
+started = {}
+done = set()
+with open('$PROGRESS_FILE') as f:
+    for line in f:
+        m = re.search(r'\] ([\w-]+):', line)
+        if m:
+            item_id = m.group(1)
+            if '(START)' in line:
+                started[item_id] = line.strip()
+            if '[DONE' in line or '[RESOLVED]' in line:
+                done.add(item_id)
+# Find items started but not done
+unfinished = [k for k in started if k not in done]
+if unfinished:
+    print(unfinished[-1])  # Most recent unfinished
+else:
+    print('')
+" 2>/dev/null || echo "")
+
+        if [[ -n "$BRANCH_RESUME_TASK" ]]; then
+            echo "   ⚠️  Unerledigte Arbeit gefunden: $BRANCH_RESUME_TASK"
+            echo "   → Selector wird angewiesen, diesen Task zu priorisieren."
+        fi
+    fi
+fi
+
 for ((i=1; i<=MAX_ITERATIONS; i++)); do
-    # Show iteration header only for non-opencode tools (opencode has its own header)
-    if [[ "$TOOL" != "opencode" ]]; then
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "📍 Iteration $i von $MAX_ITERATIONS - $(date '+%Y-%m-%d %H:%M:%S')"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
+    # Show branch info on first iteration
+    if [[ -n "$CURRENT_BRANCH" && "$CURRENT_BRANCH" != "main" && "$CURRENT_BRANCH" != "master" && $i -eq 1 ]]; then
+        echo "🌿 Branch: $CURRENT_BRANCH"
     fi
 
     # Load perceptions
@@ -1124,17 +1100,7 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
         PERCEPTIONS=$(cat "$PERCEPTIONS_FILE")
     fi
 
-    # Build the full prompt based on tool
-    case $TOOL in
-        claude)
-            # Claude supports @-references
-            FULL_PROMPT="@.ralphy/prd.json @.ralphy/progress.txt @CLAUDE.md @.ralphy/RALPHY_PROMPT.md
----
-${PERCEPTIONS}
-${CONTINUE_CONTEXT}"
-            result=$($CMD $CMD_ARGS "$FULL_PROMPT" 2>&1) || true
-            ;;
-        opencode)
+    # Build the full prompt
             # OpenCode: read file contents and embed in prompt (like claude)
             # OpenCode may not support -f flag as expected, so we read files directly
 
@@ -1190,6 +1156,62 @@ except:
                     exit 0
                 fi
 
+                # ── FORCE_TASK: Skip selector if --task was given ──
+                if [[ -n "$FORCE_TASK" ]]; then
+                    echo ""
+                    echo "┌─────────────────────────────────────────────────────────┐"
+                    echo "│  🎯 --task: Überspringe Selector, lade Task direkt...  │"
+                    echo "└─────────────────────────────────────────────────────────┘"
+                    echo ""
+
+                    # Load item from prd.json by ID (case-insensitive)
+                    FORCE_RESULT=$(python3 -c "
+import json, sys
+try:
+    with open('$TASK_FILE') as f:
+        data = json.load(f)
+    target = '$FORCE_TASK'.lower()
+    for item in data.get('items', []):
+        if item.get('id', '').lower() == target:
+            print(item.get('id', ''))
+            print(item.get('gh_issue_number', ''))
+            print(item.get('description', ''))
+            print(item.get('details', ''))
+            sys.exit(0)
+    print('NOT_FOUND')
+except Exception as e:
+    print('ERROR:' + str(e))
+" 2>/dev/null || echo "ERROR")
+
+                    FORCE_FIRST_LINE=$(echo "$FORCE_RESULT" | head -1)
+                    if [[ "$FORCE_FIRST_LINE" == "NOT_FOUND" ]]; then
+                        echo "❌ FEHLER: Task '$FORCE_TASK' nicht in $TASK_FILE gefunden."
+                        echo "   Verfügbare IDs:"
+                        python3 -c "
+import json
+with open('$TASK_FILE') as f:
+    data = json.load(f)
+for item in data.get('items', []):
+    status = '✅' if item.get('passes') else '⬚'
+    print(f'   {status} {item.get(\"id\", \"?\")} — {item.get(\"description\", \"\")}')
+" 2>/dev/null || true
+                        exit 1
+                    elif [[ "$FORCE_FIRST_LINE" == ERROR* ]]; then
+                        echo "❌ FEHLER beim Laden von $TASK_FILE: $FORCE_FIRST_LINE"
+                        exit 1
+                    fi
+
+                    GH_ITEM_ID=$(echo "$FORCE_RESULT" | sed -n '1p')
+                    GH_ITEM_ISSUE_NUM=$(echo "$FORCE_RESULT" | sed -n '2p')
+                    GH_ITEM_DESC=$(echo "$FORCE_RESULT" | sed -n '3p')
+                    GH_ITEM_DETAILS=$(echo "$FORCE_RESULT" | sed -n '4,$p')
+                    USE_AGENT_MODE=true
+                    FORCE_TASK=""  # Only force first iteration
+
+                    echo "✅ Forced Task: $GH_ITEM_ID (Issue #$GH_ITEM_ISSUE_NUM)"
+                    echo "   $GH_ITEM_DESC"
+                    echo ""
+                else
                 # ── STEP 1: Selector-Agent wählt das nächste Item ──
                 echo ""
                 echo "┌─────────────────────────────────────────────────────────┐"
@@ -1198,17 +1220,21 @@ except:
                 echo ""
 
                 SELECTOR_AGENT="${SELECTOR_AGENT:-build}"
-                SELECTOR_PROMPT="Lies die Datei .ralphy/prd.json und .ralphy/progress.txt.
+                SELECTOR_PROMPT="Lies die Dateien .ralphy/prd.json und .ralphy/progress.txt.
 
 Analysiere alle offenen Items (passes: false, mit gh_issue_number).
+
+## WICHTIG: progress.txt prüfen
+Lies .ralphy/progress.txt und prüfe ob es Items gibt, die einen (START)-Eintrag haben aber KEINEN [DONE]- oder [RESOLVED]-Eintrag. Diese Items wurden angefangen aber nicht abgeschlossen — sie haben **höchste Priorität** und MÜSSEN zuerst gewählt werden!
 
 Deine Aufgabe ist es, das *strategisch wichtigste* nächste Item auszuwählen.
 
 Priorisiere in dieser Reihenfolge:
-1. **Blocker-Status**: Wähle NUR Items, deren Dependencies (\`dependencies\`) bereits erledigt sind (\`passes: true\`).
-2. **Priorität**: Critical > High > Medium > Low.
-3. **Logische Architektur**: Backend vor Frontend, Core vor UI, Infrastruktur vor Features.
-4. **Machbarkeit**: Prüfe kurz im Code (via Tools), ob die Voraussetzungen geschaffen sind.
+1. **Unerledigte Arbeit**: Items mit START aber ohne DONE/RESOLVED in progress.txt — diese ZUERST!
+2. **Blocker-Status**: Wähle NUR Items, deren Dependencies (\`dependencies\`) bereits erledigt sind (\`passes: true\`).
+3. **Priorität**: Critical > High > Medium > Low.
+4. **Logische Architektur**: Backend vor Frontend, Core vor UI, Infrastruktur vor Features.
+5. **Machbarkeit**: Prüfe kurz im Code (via Tools), ob die Voraussetzungen geschaffen sind.
 
 Vermeide strikt:
 - Einfach das erste Item der Liste zu nehmen (prüfe die ganze Liste!).
@@ -1223,6 +1249,27 @@ SELECTED|GH-042|42|Login-Button reagiert nicht auf Klick
 
 Wenn kein offenes Item gefunden wurde, antworte:
 SELECTED|NONE|0|Keine offenen Items"
+
+                # Append user message to selector prompt if set
+                if [[ -n "$USER_MESSAGE" ]]; then
+                    SELECTOR_PROMPT="${SELECTOR_PROMPT}
+
+## Zusätzliche Anweisung vom User:
+${USER_MESSAGE}"
+                fi
+
+                # If on feature branch with unfinished work, instruct selector to prioritize it
+                if [[ -n "$BRANCH_RESUME_TASK" ]]; then
+                    SELECTOR_PROMPT="${SELECTOR_PROMPT}
+
+## WICHTIG: Feature-Branch mit unerledigter Arbeit
+Wir sind auf Branch '$CURRENT_BRANCH'. Laut progress.txt wurde an Item '$BRANCH_RESUME_TASK' bereits gearbeitet (START-Eintrag vorhanden, aber kein DONE).
+
+**Du MUSST dieses Item auswählen**, damit die Arbeit abgeschlossen wird.
+Wähle ein anderes Item NUR wenn '$BRANCH_RESUME_TASK' bereits als passes:true in prd.json markiert ist."
+
+                    BRANCH_RESUME_TASK=""  # Only force on first iteration
+                fi
 
                 # Run selector agent
                 OC_SELECTOR_CMD="${OPENCODE_FULL_PATH:-opencode}"
@@ -1292,6 +1339,7 @@ except:
                     echo "   Ausgabe: $(echo "$SELECTOR_OUTPUT" | tail -3)"
                     echo "   Fallback auf normalen Modus..."
                 fi
+                fi  # end of FORCE_TASK else
             fi
 
             if [[ "$USE_AGENT_MODE" == "true" ]]; then
@@ -1357,6 +1405,14 @@ $(cat "$CLAUDE_FILE" 2>/dev/null || echo "Nicht gefunden")
 ## Stop Condition
 
 Wenn du mit Issue #${GH_ITEM_ISSUE_NUM} fertig bist, gib aus: <promise>COMPLETE</promise>"
+
+                # Append user message to implementer prompt if set
+                if [[ -n "$USER_MESSAGE" ]]; then
+                    FULL_PROMPT="${FULL_PROMPT}
+
+## Zusätzliche Anweisung vom User:
+${USER_MESSAGE}"
+                fi
             else
                 FULL_PROMPT="${RALPHY_PROMPT_BASE}
 
@@ -1374,6 +1430,14 @@ $(cat "$CLAUDE_FILE" 2>/dev/null || echo "⚠️  Datei nicht gefunden: $CLAUDE_
 ---
 ${PERCEPTIONS}
 ${CONTINUE_CONTEXT}"
+
+                # Append user message to normal prompt if set
+                if [[ -n "$USER_MESSAGE" ]]; then
+                    FULL_PROMPT="${FULL_PROMPT}
+
+## Zusätzliche Anweisung vom User:
+${USER_MESSAGE}"
+                fi
             fi
             # Execute: opencode run (with agent or model) "prompt"
             # Start progress indicator in background with fixed header at top
@@ -1715,21 +1779,6 @@ EOF
                 fi
             fi
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            ;;
-        ccs)
-            # CCS: uses @-references like claude
-            FULL_PROMPT="@.ralphy/prd.json @.ralphy/progress.txt @CLAUDE.md @.ralphy/RALPHY_PROMPT.md
----
-${PERCEPTIONS}
-${CONTINUE_CONTEXT}"
-            result=$($CMD $CMD_ARGS "$FULL_PROMPT" 2>&1) || true
-            ;;
-    esac
-
-    # Print result (already printed above for opencode, but print again for others)
-    if [[ "$TOOL" != "opencode" ]]; then
-        echo "$result"
-    fi
 
     # Check for errors in result (but don't treat empty result as error - might be normal)
     if [[ -n "$result" ]] && ([[ "$result" == *"Error:"* ]] || [[ "$result" == *"error"* ]] || [[ "$result" == *"FEHLER"* ]] || [[ "$result" == *"File not found"* ]]); then

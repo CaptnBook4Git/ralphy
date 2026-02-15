@@ -1,0 +1,21 @@
+{
+  "version": "1.0.0",
+  "bugs": [
+    {
+      "id": "BUG-001",
+      "prd_id": null,
+      "title": "Bug-Titel hier",
+      "description": "Detaillierte Beschreibung des Bugs...",
+      "steps_to_reproduce": [
+        "Schritt 1:...",
+        "Schritt 2:...",
+        "Schritt 3:..."
+      ],
+      "error_message": null,
+      "status": "open",
+      "priority": "high",
+      "created": "2026-01-19",
+      "resolved": null
+    }
+  ]
+}

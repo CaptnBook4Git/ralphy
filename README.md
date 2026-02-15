@@ -1,7 +1,7 @@
 # Ralphy Wiggum Loop 🔄
-### The Autonomous AI Coding Agent for Claude Code, OpenCode & Antigravity
+### The Autonomous AI Coding Agent for OpenCode
 
-**Ralphy** is a powerful shell wrapper and autonomous loop designed to turn CLI-based AI coding tools into fully autonomous software engineers. It enables **Claude Code**, **OpenCode**, and **CCS** to work in a continuous "Ralph Wiggum" loop: Plan, Code, Test, Document, and Commit - over and over again until the job is done.
+**Ralphy** is a powerful shell wrapper and autonomous loop designed to turn OpenCode CLI into a fully autonomous software engineer. It enables continuous "Ralph Wiggum" loops: Plan, Code, Test, Document, and Commit - over and over again until the job is done.
 
 > *"I'm helping!"* — Ralphy Wiggum
 
@@ -10,14 +10,11 @@
 ## 🚀 Key Features
 
 *   **Autonomous Coding Loop**: Runs continuously to implement features from a PRD.
-*   **Multi-Provider Support**: Works seamlessly with:
-    *   **Claude Code** (Anthropic)
-    *   **OpenCode CLI** (Antigravity, Gemini 3 Pro, Claude Opus 4.5)
-    *   **CCS** (Claude Code Switch - GLM, DeepSeek, etc.)
+*   **Any Model via OpenCode**: Use any model available through `opencode models` — GPT-5.2, Gemini 3 Pro, Claude Opus 4.5, GLM 4.7, and many more.
 *   **Institutional Memory**: Maintains a `progress.txt` and `important-perceptions.md` to prevent repetitive mistakes and context rot.
 *   **Self-Healing**: Runs tests (`flutter test`, `npm test`, etc.) and fixes errors automatically before committing.
-*   **SEO Optimized Workflow**: Designed for developers searching for "OpenCode Ralph Wiggum Loop", "Antigravity Ralph Wiggum", or "Claude Code Autonomous Agent".
-*   **Thinking Mode Support**: Native support for "Thinking" models like Claude 3.7 Sonnet, Gemini 2.5 Flash Thinking, and GLM-4-Thinking.
+*   **GH-Issues Workflow**: Create PRDs directly from GitHub Issues and let agents work through them automatically.
+*   **Dynamic Model & Agent Selection**: Interactive menus for choosing models and agents at runtime.
 
 ---
 
@@ -44,6 +41,11 @@
     ralphy --version
     ```
 
+5.  **Prerequisites**: [OpenCode CLI](https://opencode.ai) must be installed:
+    ```bash
+    curl -fsSL https://opencode.ai/install | bash
+    ```
+
 ---
 
 ## 📖 Usage
@@ -58,28 +60,37 @@ ralphy
 
 ### Running the Loop
 
-**Standard Mode (Claude Code Default):**
 ```bash
-ralphy              # Run 10 iterations using default Claude Code
+ralphy              # Run 10 iterations (default model: gpt-5.2)
 ralphy 20           # Run 20 iterations
+ralphy -m google/antigravity-gemini-3-pro 15   # Gemini 3 Pro, 15 iterations
+ralphy -m zai-coding-plan/glm-4.7 50          # GLM 4.7, 50 iterations
 ```
 
-**OpenCode / Antigravity Mode:**
-Perfect for using **Gemini 3 Pro** or **Claude Opus 4.5** via Antigravity.
+### Choosing a Model
+
+Use `-m` / `--model` to select any model available via OpenCode:
 
 ```bash
-ralphy --oc-gemini 15       # OpenCode + Gemini 3 Pro (15 iterations)
-ralphy --oc-gemini-low 15   # OpenCode + Gemini 3 Pro (Low Thinking)
-ralphy --oc-agy 10          # OpenCode + Antigravity Claude Sonnet 4.5
-ralphy --oc-agy-opus 5      # OpenCode + Antigravity Claude Opus 4.5 (Thinking)
+ralphy -m github-copilot/gpt-5.2          # GPT-5.2 (default)
+ralphy -m google/antigravity-gemini-3-pro  # Gemini 3 Pro via Antigravity
+ralphy -m google/antigravity-claude-opus-4-5-thinking  # Claude Opus 4.5
+ralphy -m cerebras/zai-glm-4.7            # GLM 4.7 via Cerebras
+ralphy --list                              # Show all available models
 ```
 
-**CCS (Claude Code Switch) Mode:**
-Use cheaper or specialized models via CCS.
+### GH-Issues Workflow
 
 ```bash
-ralphy --ccs-glm 50         # GLM 4.6 (Cost effective for overnight loops)
-ralphy --ccs-glmt 10        # GLM 4.6 + Thinking
+ralphy create-prd --gh-issues              # Create PRD from all open GitHub Issues
+ralphy create-prd --gh-issues 1,3,5        # Only specific issues
+ralphy 10                                   # Loop starts, auto-detects GH-Issues
+```
+
+### Bugfix Mode
+
+```bash
+ralphy --bugfix 10    # Use bugs.json instead of prd.json
 ```
 
 ---
@@ -96,12 +107,6 @@ Ralphy enforces a strict disciplined workflow for the AI agent:
 6.  **Commit**: Creates a clean git commit.
 7.  **Repeat**: Starts the next iteration.
 
-### Supported CLI Tools
-
-*   **Claude Code**: The official Anthropic CLI.
-*   **OpenCode**: Access Google's Antigravity models and others directly from the terminal.
-*   **CCS**: Use any OpenAI-compatible API (DeepSeek, Qwen, GLM, etc.) with the Claude Code interface.
-
 ---
 
 ## 📁 Configuration
@@ -113,15 +118,25 @@ Ralphy relies on a `.ralphy/` folder in your project root:
 *   `.ralphy/RALPHY_PROMPT.md`: The system prompt used for the loop (customizable).
 *   `.ralphy/important-perceptions.md`: A "Do's and Don'ts" file that the agent updates itself to learn from mistakes.
 
+### OpenCode Agents
+
+Ralphy ships custom OpenCode agents in `templates/opencode-agents/`. To use them, symlink them into your OpenCode agent config:
+
+```bash
+ln -sf ~/Code/ralphy/templates/opencode-agents/selector.md ~/.config/opencode/agent/selector.md
+```
+
+*   **selector**: Intelligent task selector that analyzes PRD, progress, and codebase to pick the strategically best next issue. Automatically prioritizes unfinished tasks (started but not completed).
+
 ---
 
-## 🤖 Keywords & SEO
+## 🌿 Feature-Branch Detection
 
-*   **OpenCode Ralph Wiggum Loop**: Run autonomous loops with OpenCode CLI.
-*   **Antigravity Ralph Wiggum**: Leverage Antigravity models for continuous coding.
-*   **Claude Code CCS Ralph**: Use CCS to switch providers in a Ralph Wiggum loop.
-*   **Autonomous Coding Agent**: Turn your terminal into an autonomous software engineer.
-*   **Gemini 3 Pro Coding Loop**: Use the latest Gemini models for sustained development.
+When running on a feature branch (not `main`/`master`), Ralphy automatically:
+
+1. Detects unfinished tasks from `progress.txt` (started but not completed).
+2. Instructs the Selector Agent to prioritize resuming that work.
+3. Prevents starting new tasks while previous work is incomplete.
 
 ---
 
